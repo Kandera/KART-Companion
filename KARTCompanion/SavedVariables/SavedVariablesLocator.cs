@@ -9,13 +9,31 @@ public static class SavedVariablesLocator
 {
     public static IReadOnlyList<string> FindSavedVariablesFiles(string wowInstallRoot)
     {
-        var accountDir = Path.Combine(wowInstallRoot, "_retail_", "WTF", "Account");
-        if (!Directory.Exists(accountDir)) return Array.Empty<string>();
+        return FindAccountDir(wowInstallRoot) is { } accountDir
+            ? Directory.GetDirectories(accountDir)
+                .Select(acc => Path.Combine(acc, "SavedVariables", "KeineAhnungRaidTools.lua"))
+                .Where(File.Exists)
+                .ToList()
+            : Array.Empty<string>();
+    }
 
-        return Directory.GetDirectories(accountDir)
-            .Select(acc => Path.Combine(acc, "SavedVariables", "KeineAhnungRaidTools.lua"))
-            .Where(File.Exists)
-            .ToList();
+    // Accepts either the WoW install root (the folder that CONTAINS "_retail_") or the
+    // "_retail_" folder itself — a folder picker inherently invites both interpretations of
+    // "select the folder _retail_ is in", so this is tolerant of either.
+    private static string? FindAccountDir(string selectedPath)
+    {
+        var direct = Path.Combine(selectedPath, "_retail_", "WTF", "Account");
+        if (Directory.Exists(direct)) return direct;
+
+        var asRetailItself = Path.Combine(selectedPath, "WTF", "Account");
+        if (Path.GetFileName(selectedPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+                .Equals("_retail_", StringComparison.OrdinalIgnoreCase)
+            && Directory.Exists(asRetailItself))
+        {
+            return asRetailItself;
+        }
+
+        return null;
     }
 
     /// <summary>Best-effort scan of common install locations, used on first run before the user

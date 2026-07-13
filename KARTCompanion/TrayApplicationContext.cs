@@ -15,6 +15,8 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly IReadOnlyList<ISimReportFetcher> _simFetchers;
     private readonly NotifyIcon _trayIcon;
     private readonly System.Windows.Forms.Timer _syncTimer = new();
+    private readonly Bitmap _logo;
+    private readonly Icon _appIcon;
 
     private CompanionConfig _config;
     private bool _syncing;
@@ -24,6 +26,9 @@ public sealed class TrayApplicationContext : ApplicationContext
         _httpClient = httpClient;
         _simFetchers = simFetchers;
         _config = ConfigStore.Load();
+
+        _logo = AppIcon.LoadLogoBitmap();
+        _appIcon = AppIcon.CreateTrayIcon(_logo);
 
         if (string.IsNullOrWhiteSpace(_config.SavedVariablesFilePath))
         {
@@ -44,7 +49,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _trayIcon = new NotifyIcon
         {
-            Icon = System.Drawing.SystemIcons.Application,
+            Icon = _appIcon,
             Text = "KART Companion",
             ContextMenuStrip = menu,
             Visible = true,
@@ -71,7 +76,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void OpenSettings()
     {
-        using var form = new SettingsForm(_config);
+        using var form = new SettingsForm(_config, RunSyncWithConfigAsync, _logo, _appIcon);
         if (form.ShowDialog() == DialogResult.OK)
         {
             _config = form.Result;
@@ -101,46 +106,52 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
 
         _syncing = true;
-        _trayIcon.Icon = System.Drawing.SystemIcons.Information;
         _trayIcon.Text = "KART Companion — syncing...";
 
+        var result = await RunSyncWithConfigAsync(_config);
+
+        if (result.Success)
+        {
+            UpdateTooltip();
+            if (result.SkippedCharacters > 0)
+            {
+                _trayIcon.BalloonTipTitle = "KART Companion";
+                _trayIcon.BalloonTipText = $"Synced {result.PlayerCount} players ({result.SkippedCharacters} skipped — no readable sim data).";
+                _trayIcon.ShowBalloonTip(4000);
+            }
+        }
+        else
+        {
+            ShowError(result.ErrorMessage ?? "Unknown sync error.");
+        }
+
+        _syncing = false;
+    }
+
+    // Shared by the tray "Sync now" menu item, the background timer, and the Settings dialog's
+    // "Force Sync" button — all three just want "run a sync against this config and tell me what
+    // happened" without duplicating the WowUtilsClient/SyncEngine wiring three times. Persists
+    // config (LastSyncUtc) and adopts it as the live _config on success, same as the old
+    // SyncNowAsync body did — the Settings dialog forcing a sync against its not-yet-saved field
+    // values should still stick if it works.
+    private async Task<SyncResult> RunSyncWithConfigAsync(CompanionConfig config)
+    {
         try
         {
-            var wowUtils = new WowUtilsClient(_httpClient, _config.GroupKey!);
+            var wowUtils = new WowUtilsClient(_httpClient, config.GroupKey!);
             var discovery = await wowUtils.GetDiscoveryAsync();
 
-            var engine = new SyncEngine(wowUtils, _simFetchers, () => _config, cfg => { _config = cfg; ConfigStore.Save(cfg); });
-            var result = await engine.RunOnceAsync(discovery.Group.GroupId);
-
-            if (result.Success)
-            {
-                _trayIcon.Icon = System.Drawing.SystemIcons.Application;
-                UpdateTooltip();
-                if (result.SkippedCharacters > 0)
-                {
-                    _trayIcon.BalloonTipTitle = "KART Companion";
-                    _trayIcon.BalloonTipText = $"Synced {result.PlayerCount} players ({result.SkippedCharacters} skipped — no readable sim data).";
-                    _trayIcon.ShowBalloonTip(4000);
-                }
-            }
-            else
-            {
-                ShowError(result.ErrorMessage ?? "Unknown sync error.");
-            }
+            var engine = new SyncEngine(wowUtils, _simFetchers, () => config, cfg => { _config = cfg; ConfigStore.Save(cfg); });
+            return await engine.RunOnceAsync(discovery.Group.GroupId);
         }
         catch (Exception ex)
         {
-            ShowError(ex.Message);
-        }
-        finally
-        {
-            _syncing = false;
+            return new SyncResult(false, 0, 0, ex.Message);
         }
     }
 
     private void ShowError(string message)
     {
-        _trayIcon.Icon = System.Drawing.SystemIcons.Warning;
         _trayIcon.Text = "KART Companion — sync failed";
         _trayIcon.BalloonTipTitle = "KART Companion — sync failed";
         _trayIcon.BalloonTipText = message;
@@ -167,6 +178,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             _trayIcon.Dispose();
             _syncTimer.Dispose();
+            _appIcon.Dispose();
+            _logo.Dispose();
         }
         base.Dispose(disposing);
     }

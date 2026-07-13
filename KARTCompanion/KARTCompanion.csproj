@@ -10,4 +10,8 @@
     <RootNamespace>KARTCompanion</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\KAimg.jpg" />
+  </ItemGroup>
+
 </Project>

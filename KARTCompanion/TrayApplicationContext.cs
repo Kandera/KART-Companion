@@ -40,7 +40,11 @@ public sealed class TrayApplicationContext : ApplicationContext
             }
         }
 
-        var menu = new ContextMenuStrip();
+        var menu = new ContextMenuStrip
+        {
+            Renderer = new ToolStripProfessionalRenderer(new TrayMenuColorTable()),
+            ForeColor = Theme.Text,
+        };
         menu.Items.Add("Sync now", null, async (_, _) => await SyncNowAsync());
         menu.Items.Add("Open WoW folder", null, (_, _) => OpenWowFolder());
         menu.Items.Add("Settings...", null, (_, _) => OpenSettings());

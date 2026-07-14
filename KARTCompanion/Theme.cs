@@ -18,25 +18,34 @@ public static class Theme
 
     private const int CornerRadius = 6;
 
-    // WinForms controls don't support a corner-radius property — clipping the control to a
-    // rounded-rect Region is the standard workaround. The Region is sized to the control's
-    // bounds at the point it's created, so it must be re-applied on Resize or it'll be stale
-    // (e.g. wrong size) after any layout pass that changes the control's Width/Height.
+    // WinForms controls don't support a corner-radius property. A rounded-rect Region clips the
+    // control's fill/silhouette to the shape, but it also clips away the corner pixels of any
+    // border drawn at the control's true rectangular bounds (native FixedSingle chrome, or
+    // FlatAppearance's flat border) — the corner joints get cut off, leaving a notched, "broken"
+    // look. So this only ever handles the silhouette; a border, if wanted, must be painted
+    // separately along the same rounded path (see StyleButton's Paint handler).
+    private static GraphicsPath BuildRoundedPath(int width, int height)
+    {
+        var d = CornerRadius * 2;
+        var rect = new Rectangle(0, 0, width, height);
+        var path = new GraphicsPath();
+        path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+        path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
+        path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+        path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    // The Region is sized to the control's bounds at the point it's created, so it must be
+    // re-applied on Resize or it'll be stale (e.g. wrong size) after any layout pass that
+    // changes the control's Width/Height.
     private static void ApplyRoundedRegion(Control control)
     {
         void Apply()
         {
             if (control.Width <= 0 || control.Height <= 0) return;
-
-            var d = CornerRadius * 2;
-            var rect = new Rectangle(0, 0, control.Width, control.Height);
-            using var path = new GraphicsPath();
-            path.AddArc(rect.X, rect.Y, d, d, 180, 90);
-            path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
-            path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
-            path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
-            path.CloseFigure();
-
+            using var path = BuildRoundedPath(control.Width, control.Height);
             control.Region?.Dispose();
             control.Region = new Region(path);
         }
@@ -61,7 +70,10 @@ public static class Theme
     {
         box.BackColor = Panel;
         box.ForeColor = Text;
-        box.BorderStyle = BorderStyle.FixedSingle;
+        // No border — FixedSingle's corner pixels would get clipped by the rounded Region,
+        // leaving a notched look (see ApplyRoundedRegion's comment). The Panel-vs-Background
+        // fill contrast alone is enough definition for a rounded, borderless field.
+        box.BorderStyle = BorderStyle.None;
         ApplyRoundedRegion(box);
     }
 
@@ -69,7 +81,7 @@ public static class Theme
     {
         box.BackColor = Panel;
         box.ForeColor = Text;
-        box.BorderStyle = BorderStyle.FixedSingle;
+        box.BorderStyle = BorderStyle.None;
         ApplyRoundedRegion(box);
     }
 
@@ -78,8 +90,11 @@ public static class Theme
     public static void StyleButton(Button button, bool primary = false)
     {
         button.FlatStyle = FlatStyle.Flat;
-        button.FlatAppearance.BorderColor = Accent;
-        button.FlatAppearance.BorderSize = 1;
+        // BorderSize = 0: FlatAppearance's own border is drawn at the button's true rectangular
+        // bounds and would get its corners clipped by the rounded Region, same notching problem
+        // as TextBox's FixedSingle border. Paint the outline ourselves instead, along the exact
+        // same rounded path the Region uses, so it's never cut off.
+        button.FlatAppearance.BorderSize = 0;
         button.BackColor = primary ? Accent : Panel;
         button.ForeColor = primary ? Background : Text;
         button.FlatAppearance.MouseOverBackColor = primary
@@ -87,5 +102,16 @@ public static class Theme
             : Color.FromArgb(30, 45, 58);
         button.Cursor = Cursors.Hand;
         ApplyRoundedRegion(button);
+
+        button.Paint += (_, e) =>
+        {
+            if (button.Width <= 1 || button.Height <= 1) return;
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            // Inset by 1px so the pen's stroke width stays fully inside the Region clip —
+            // a pen centered exactly on the clip boundary would have half its width cut off.
+            using var path = BuildRoundedPath(button.Width - 1, button.Height - 1);
+            using var pen = new Pen(Accent, 1);
+            e.Graphics.DrawPath(pen, path);
+        };
     }
 }

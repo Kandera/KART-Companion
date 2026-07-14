@@ -22,6 +22,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private CompanionConfig _config;
     private bool _syncing;
+    private bool _errorShown;
 
     public TrayApplicationContext(HttpClient httpClient, IReadOnlyList<ISimReportFetcher> simFetchers)
     {
@@ -122,6 +123,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         if (result.Success)
         {
+            _errorShown = false;
             UpdateTooltip();
             if (result.SkippedCharacters > 0)
             {
@@ -160,6 +162,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void ShowError(string message)
     {
+        _errorShown = true;
         _trayIcon.Icon = _errorIcon;
         _trayIcon.Text = "KART Companion — sync failed";
         _trayIcon.BalloonTipTitle = "KART Companion — sync failed";
@@ -169,10 +172,13 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void UpdateTooltip()
     {
-        // Only reset to idle if nothing is currently syncing — OpenSettings() also calls this
-        // after a successful config save, and that can happen while a sync triggered before the
-        // dialog opened is still in flight; don't clobber the syncing/error icon in that case.
-        if (!_syncing)
+        // Only reset to idle if nothing is syncing and no error is currently shown.
+        // _syncing guards against OpenSettings()'s UpdateTooltip() call clobbering a
+        // *different*, still-in-flight sync's icon. _errorShown guards against the same
+        // call clearing a red error dot just because Settings was saved — the spec requires
+        // the error icon to persist until the next successful sync, not just until any
+        // config save.
+        if (!_syncing && !_errorShown)
         {
             _trayIcon.Icon = _appIcon;
         }

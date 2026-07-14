@@ -1,3 +1,5 @@
+using System.Drawing.Drawing2D;
+
 namespace KARTCompanion;
 
 /// <summary>Colors lifted from KAimg.jpg (the addon's own icon: dark navy circle, cyan ring,
@@ -13,6 +15,35 @@ public static class Theme
     public static readonly Color TextDim = Color.FromArgb(150, 165, 175);
     public static readonly Color Error = Color.FromArgb(255, 90, 90);
     public static readonly Color Success = Color.FromArgb(110, 230, 150);
+
+    private const int CornerRadius = 6;
+
+    // WinForms controls don't support a corner-radius property — clipping the control to a
+    // rounded-rect Region is the standard workaround. The Region is sized to the control's
+    // bounds at the point it's created, so it must be re-applied on Resize or it'll be stale
+    // (e.g. wrong size) after any layout pass that changes the control's Width/Height.
+    private static void ApplyRoundedRegion(Control control)
+    {
+        void Apply()
+        {
+            if (control.Width <= 0 || control.Height <= 0) return;
+
+            var d = CornerRadius * 2;
+            var rect = new Rectangle(0, 0, control.Width, control.Height);
+            using var path = new GraphicsPath();
+            path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+            path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
+            path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+            path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+
+            control.Region?.Dispose();
+            control.Region = new Region(path);
+        }
+
+        Apply();
+        control.Resize += (_, _) => Apply();
+    }
 
     public static void StyleForm(Form form)
     {
@@ -31,6 +62,7 @@ public static class Theme
         box.BackColor = Panel;
         box.ForeColor = Text;
         box.BorderStyle = BorderStyle.FixedSingle;
+        ApplyRoundedRegion(box);
     }
 
     public static void StyleNumericUpDown(NumericUpDown box)
@@ -38,6 +70,7 @@ public static class Theme
         box.BackColor = Panel;
         box.ForeColor = Text;
         box.BorderStyle = BorderStyle.FixedSingle;
+        ApplyRoundedRegion(box);
     }
 
     // Primary: solid bright-cyan fill with dark text — the "call to action" look. Secondary:
@@ -53,5 +86,6 @@ public static class Theme
             ? Color.FromArgb(90, 235, 255)
             : Color.FromArgb(30, 45, 58);
         button.Cursor = Cursors.Hand;
+        ApplyRoundedRegion(button);
     }
 }

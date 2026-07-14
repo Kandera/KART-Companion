@@ -54,24 +54,26 @@ public sealed class SettingsForm : Form
         _groupKeyBox = new TextBox { Left = 12, Top = 88, Width = 396, UseSystemPasswordChar = true, Text = current.GroupKey ?? "" };
         Theme.StyleTextBox(_groupKeyBox);
 
-        var wowPathLabel = new Label { Text = "WoW install folder (contains \"_retail_\"):", Left = 12, Top = 123, Width = 300 };
+        var wowPathLabel = new Label { Text = "WoW install folder (contains \"_retail_\"):", Left = 12, Top = 136, Width = 300 };
         Theme.StyleLabel(wowPathLabel);
-        _wowPathBox = new TextBox { Left = 12, Top = 143, Width = 316 };
+        _wowPathBox = new TextBox { Left = 12, Top = 156, Width = 316 };
         Theme.StyleTextBox(_wowPathBox);
-        var browseButton = new Button { Text = "Browse...", Left = 334, Top = 142, Width = 74 };
+        var browseButton = new Button { Text = "Browse...", Left = 334, Top = 155, Width = 74 };
         Theme.StyleButton(browseButton);
         browseButton.Click += (_, _) => BrowseForWowFolder();
 
-        var intervalLabel = new Label { Text = "Sync interval (minutes):", Left = 12, Top = 178, Width = 200 };
+        var divider2 = new Panel { Left = 12, Top = 186, Width = 396, Height = 1, BackColor = Theme.AccentDim };
+
+        var intervalLabel = new Label { Text = "Sync interval (minutes):", Left = 12, Top = 198, Width = 200 };
         Theme.StyleLabel(intervalLabel);
-        _intervalBox = new NumericUpDown { Left = 12, Top = 198, Width = 80, Minimum = 1, Maximum = 240, Value = Math.Clamp(current.SyncIntervalMinutes, 1, 240) };
+        _intervalBox = new NumericUpDown { Left = 12, Top = 218, Width = 80, Minimum = 1, Maximum = 240, Value = Math.Clamp(current.SyncIntervalMinutes, 1, 240) };
         Theme.StyleNumericUpDown(_intervalBox);
 
         // AutoSize + MaximumSize lets this grow downward to however many lines a long path
         // actually needs, instead of clipping it at a guessed fixed height.
         _statusLabel = new Label
         {
-            Left = 12, Top = 228, Width = 396,
+            Left = 12, Top = 248, Width = 396,
             AutoSize = true,
             MaximumSize = new System.Drawing.Size(396, 0),
         };
@@ -94,6 +96,7 @@ public sealed class SettingsForm : Form
         {
             logoBox, titleLabel, divider,
             groupKeyLabel, _groupKeyBox, wowPathLabel, _wowPathBox, browseButton,
+            divider2,
             intervalLabel, _intervalBox, _statusLabel, _forceSyncButton, okButton, cancelButton,
         });
 

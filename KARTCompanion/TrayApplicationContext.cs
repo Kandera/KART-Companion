@@ -21,7 +21,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly Icon _errorIcon;
 
     private CompanionConfig _config;
-    private bool _syncing;
+    private readonly SyncGate _syncGate = new();
     private bool _errorShown;
 
     public TrayApplicationContext(HttpClient httpClient, IReadOnlyList<ISimReportFetcher> simFetchers)
@@ -85,13 +85,29 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void OpenSettings()
     {
-        using var form = new SettingsForm(_config, RunSyncWithConfigAsync, _logo, _appIcon);
-        if (form.ShowDialog() == DialogResult.OK)
+        // Modal ShowDialog() still pumps timer ticks, so without this the background timer and
+        // the dialog's own Force Sync button could sync concurrently.
+        _syncTimer.Stop();
+        try
         {
-            _config = form.Result;
-            ConfigStore.Save(_config);
+            using var form = new SettingsForm(_config, RunSyncWithConfigAsync, _logo, _appIcon);
+            if (form.ShowDialog() == DialogResult.OK)
+            {
+                _config = form.Result;
+                try
+                {
+                    ConfigStore.Save(_config);
+                }
+                catch (Exception ex)
+                {
+                    ShowUnexpectedError($"Failed to save settings: {ex.Message}");
+                }
+                UpdateTooltip();
+            }
+        }
+        finally
+        {
             ApplyIntervalToTimer();
-            UpdateTooltip();
         }
     }
 
@@ -107,19 +123,18 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private async Task SyncNowAsync()
     {
-        if (_syncing) return;
+        if (_syncGate.IsRunning) return;
         if (!_config.IsComplete)
         {
             OpenSettings();
             return;
         }
 
-        _syncing = true;
         _trayIcon.Text = "KART Companion — syncing...";
         _trayIcon.Icon = _syncingIcon;
 
-        var result = await RunSyncWithConfigAsync(_config);
-        _syncing = false;
+        var result = await _syncGate.RunAsync(() => RunSyncWithConfigAsync(_config));
+        if (result is null) return; // another sync was already in progress
 
         if (result.Success)
         {
@@ -170,15 +185,26 @@ public sealed class TrayApplicationContext : ApplicationContext
         _trayIcon.ShowBalloonTip(6000);
     }
 
+    // Called from Program.cs's Application.ThreadException / AppDomain.UnhandledException
+    // handlers so an unexpected crash shows a balloon instead of silently killing the tray app
+    // (or, pre-.NET-8-WinForms-hardening, showing the default WinForms crash dialog).
+    public void ShowUnexpectedError(string message)
+    {
+        _trayIcon.Text = "KART Companion — unexpected error";
+        _trayIcon.BalloonTipTitle = "KART Companion — unexpected error";
+        _trayIcon.BalloonTipText = message;
+        _trayIcon.ShowBalloonTip(6000);
+    }
+
     private void UpdateTooltip()
     {
         // Only reset to idle if nothing is syncing and no error is currently shown.
-        // _syncing guards against OpenSettings()'s UpdateTooltip() call clobbering a
+        // _syncGate.IsRunning guards against OpenSettings()'s UpdateTooltip() call clobbering a
         // *different*, still-in-flight sync's icon. _errorShown guards against the same
         // call clearing a red error dot just because Settings was saved — the spec requires
         // the error icon to persist until the next successful sync, not just until any
         // config save.
-        if (!_syncing && !_errorShown)
+        if (!_syncGate.IsRunning && !_errorShown)
         {
             _trayIcon.Icon = _appIcon;
         }

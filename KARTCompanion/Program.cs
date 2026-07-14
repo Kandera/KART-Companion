@@ -19,6 +19,14 @@ internal static class Program
 
         ApplicationConfiguration.Initialize();
 
+        // A background tray app has no console and no window to show the default WinForms crash
+        // dialog usefully — log and keep running instead of dying on an unexpected exception.
+        TrayApplicationContext? context = null;
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, e) => HandleUnhandledException(e.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            HandleUnhandledException(e.ExceptionObject as Exception ?? new Exception(e.ExceptionObject?.ToString() ?? "Unknown fatal error"));
+
         var httpClient = new HttpClient();
         httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("KARTCompanion/1.0 (+https://github.com/)");
 
@@ -28,7 +36,15 @@ internal static class Program
             new QELiveReportClient(httpClient),
         };
 
-        using var context = new TrayApplicationContext(httpClient, simFetchers);
-        Application.Run(context);
+        using (context = new TrayApplicationContext(httpClient, simFetchers))
+        {
+            Application.Run(context);
+        }
+
+        void HandleUnhandledException(Exception ex)
+        {
+            CrashLog.Log(ex);
+            context?.ShowUnexpectedError(ex.Message);
+        }
     }
 }

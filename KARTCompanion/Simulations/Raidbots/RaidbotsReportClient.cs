@@ -27,7 +27,7 @@ public sealed class RaidbotsReportClient : ISimReportFetcher
     {
         try
         {
-            var url = $"https://www.raidbots.com/reports/{summary.ReportId}/data.json";
+            var url = $"https://www.raidbots.com/reports/{Uri.EscapeDataString(summary.ReportId)}/data.json";
             var report = await _http.GetFromJsonAsync<RaidbotsReport>(url, ct);
             if (report is null) return null;
 

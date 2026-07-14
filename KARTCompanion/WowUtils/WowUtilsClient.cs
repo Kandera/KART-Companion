@@ -14,14 +14,17 @@ public sealed class WowUtilsClient : IWowUtilsFetcher
     private const string BaseUrl = "https://api.wowutils.com";
 
     private readonly HttpClient _http;
+    private readonly string _groupKey;
 
     public RateLimitInfo? LastRateLimit { get; private set; }
 
+    // httpClient is shared with the Raidbots/QE Live sim fetchers (see Program.cs), so this must
+    // never touch its DefaultRequestHeaders or BaseAddress — those apply to every request sent
+    // through the shared instance, which would leak the group key to those third-party hosts.
     public WowUtilsClient(HttpClient httpClient, string groupKey)
     {
         _http = httpClient;
-        _http.BaseAddress ??= new Uri(BaseUrl);
-        _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", groupKey);
+        _groupKey = groupKey;
     }
 
     public async Task<DiscoveryResponse> GetDiscoveryAsync(CancellationToken ct = default)
@@ -37,7 +40,8 @@ public sealed class WowUtilsClient : IWowUtilsFetcher
 
     private async Task<T> SendAsync<T>(HttpMethod method, string path, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(method, path);
+        using var request = new HttpRequestMessage(method, new Uri(BaseUrl + path));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _groupKey);
         using var response = await _http.SendAsync(request, ct);
 
         CaptureRateLimit(response);

@@ -24,18 +24,31 @@ public static class ConfigStore
         }
     }
 
-    public static void Save(CompanionConfig config)
+    private static readonly object SaveLock = new();
+
+    public static void Save(CompanionConfig config) => Save(config, ConfigPath);
+
+    public static void Save(CompanionConfig config, string configPath)
     {
-        var dir = Path.GetDirectoryName(ConfigPath)!;
+        var dir = Path.GetDirectoryName(configPath)!;
         Directory.CreateDirectory(dir);
 
         var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
-        var tempPath = ConfigPath + ".tmp";
-        File.WriteAllText(tempPath, json);
-
-        if (File.Exists(ConfigPath))
-            File.Replace(tempPath, ConfigPath, null);
-        else
-            File.Move(tempPath, ConfigPath);
+        // Unique per call, and the whole write+rename serialized via SaveLock: two overlapping
+        // Save() calls (background timer vs. Settings dialog's Force Sync) must never write to
+        // the same temp file or race each other's rename onto configPath.
+        var tempPath = configPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        lock (SaveLock)
+        {
+            try
+            {
+                File.WriteAllText(tempPath, json);
+                File.Move(tempPath, configPath, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+            }
+        }
     }
 }

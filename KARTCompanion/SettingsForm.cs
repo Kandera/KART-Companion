@@ -16,7 +16,7 @@ public sealed class SettingsForm : Form
     private readonly Func<CompanionConfig, Task<SyncResult>> _runSync;
 
     private string? _resolvedSavedVariablesPath;
-    private bool _syncing;
+    private readonly SyncGate _syncGate = new();
 
     public CompanionConfig Result { get; private set; }
 
@@ -36,13 +36,20 @@ public sealed class SettingsForm : Form
 
         var logoBox = new PictureBox
         {
-            Image = logo, SizeMode = PictureBoxSizeMode.Zoom,
-            Left = 12, Top = 12, Width = 36, Height = 36,
+            Image = logo,
+            SizeMode = PictureBoxSizeMode.Zoom,
+            Left = 12,
+            Top = 12,
+            Width = 36,
+            Height = 36,
         };
 
         var titleLabel = new Label
         {
-            Text = "KART Companion", Left = 58, Top = 18, Width = 300,
+            Text = "KART Companion",
+            Left = 58,
+            Top = 18,
+            Width = 300,
             Font = new Font(Font.FontFamily, 13, FontStyle.Bold),
         };
         Theme.StyleLabel(titleLabel);
@@ -73,7 +80,9 @@ public sealed class SettingsForm : Form
         // actually needs, instead of clipping it at a guessed fixed height.
         _statusLabel = new Label
         {
-            Left = 12, Top = 248, Width = 396,
+            Left = 12,
+            Top = 248,
+            Width = 396,
             AutoSize = true,
             MaximumSize = new System.Drawing.Size(396, 0),
         };
@@ -176,7 +185,7 @@ public sealed class SettingsForm : Form
 
     private async Task OnForceSyncAsync()
     {
-        if (_syncing) return;
+        if (_syncGate.IsRunning) return;
 
         var config = BuildResultFromFields();
         if (!config.IsComplete)
@@ -185,13 +194,16 @@ public sealed class SettingsForm : Form
             return;
         }
 
-        _syncing = true;
         _forceSyncButton.Enabled = false;
         SetStatusText("Syncing...", isError: false);
 
-        var result = await _runSync(config);
+        var result = await _syncGate.RunAsync(() => _runSync(config));
 
-        if (result.Success)
+        if (result is null)
+        {
+            // Another sync was already in progress — leave the "Syncing..." status as-is.
+        }
+        else if (result.Success)
         {
             config.LastSyncUtc = DateTimeOffset.UtcNow;
             Result = config;
@@ -204,6 +216,5 @@ public sealed class SettingsForm : Form
         }
 
         _forceSyncButton.Enabled = true;
-        _syncing = false;
     }
 }

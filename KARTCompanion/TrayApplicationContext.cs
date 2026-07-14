@@ -17,6 +17,8 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _syncTimer = new();
     private readonly Bitmap _logo;
     private readonly Icon _appIcon;
+    private readonly Icon _syncingIcon;
+    private readonly Icon _errorIcon;
 
     private CompanionConfig _config;
     private bool _syncing;
@@ -29,6 +31,8 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _logo = AppIcon.LoadLogoBitmap();
         _appIcon = AppIcon.CreateTrayIcon(_logo);
+        _syncingIcon = AppIcon.CreateTrayIcon(_logo, Theme.Accent);
+        _errorIcon = AppIcon.CreateTrayIcon(_logo, Theme.Error);
 
         if (string.IsNullOrWhiteSpace(_config.SavedVariablesFilePath))
         {
@@ -111,6 +115,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _syncing = true;
         _trayIcon.Text = "KART Companion — syncing...";
+        _trayIcon.Icon = _syncingIcon;
 
         var result = await RunSyncWithConfigAsync(_config);
 
@@ -156,6 +161,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void ShowError(string message)
     {
+        _trayIcon.Icon = _errorIcon;
         _trayIcon.Text = "KART Companion — sync failed";
         _trayIcon.BalloonTipTitle = "KART Companion — sync failed";
         _trayIcon.BalloonTipText = message;
@@ -164,6 +170,10 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void UpdateTooltip()
     {
+        // UpdateTooltip is only called after a successful sync (or at idle startup/after
+        // Settings is saved) — never while a sync is in flight or right after a failure — so
+        // resetting to the base icon here is always correct: it's the "we're idle/healthy" state.
+        _trayIcon.Icon = _appIcon;
         var last = _config.LastSyncUtc is { } t ? t.ToLocalTime().ToString("g") : "never";
         // NotifyIcon.Text has a 63-character limit.
         var text = $"KART Companion — last sync: {last}";
@@ -183,6 +193,8 @@ public sealed class TrayApplicationContext : ApplicationContext
             _trayIcon.Dispose();
             _syncTimer.Dispose();
             _appIcon.Dispose();
+            _syncingIcon.Dispose();
+            _errorIcon.Dispose();
             _logo.Dispose();
         }
         base.Dispose(disposing);

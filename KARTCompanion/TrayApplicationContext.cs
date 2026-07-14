@@ -118,6 +118,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _trayIcon.Icon = _syncingIcon;
 
         var result = await RunSyncWithConfigAsync(_config);
+        _syncing = false;
 
         if (result.Success)
         {
@@ -133,8 +134,6 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             ShowError(result.ErrorMessage ?? "Unknown sync error.");
         }
-
-        _syncing = false;
     }
 
     // Shared by the tray "Sync now" menu item, the background timer, and the Settings dialog's

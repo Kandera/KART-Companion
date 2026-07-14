@@ -170,10 +170,13 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void UpdateTooltip()
     {
-        // UpdateTooltip is only called after a successful sync (or at idle startup/after
-        // Settings is saved) — never while a sync is in flight or right after a failure — so
-        // resetting to the base icon here is always correct: it's the "we're idle/healthy" state.
-        _trayIcon.Icon = _appIcon;
+        // Only reset to idle if nothing is currently syncing — OpenSettings() also calls this
+        // after a successful config save, and that can happen while a sync triggered before the
+        // dialog opened is still in flight; don't clobber the syncing/error icon in that case.
+        if (!_syncing)
+        {
+            _trayIcon.Icon = _appIcon;
+        }
         var last = _config.LastSyncUtc is { } t ? t.ToLocalTime().ToString("g") : "never";
         // NotifyIcon.Text has a 63-character limit.
         var text = $"KART Companion — last sync: {last}";

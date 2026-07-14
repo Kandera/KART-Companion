@@ -17,9 +17,12 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _syncTimer = new();
     private readonly Bitmap _logo;
     private readonly Icon _appIcon;
+    private readonly Icon _syncingIcon;
+    private readonly Icon _errorIcon;
 
     private CompanionConfig _config;
     private bool _syncing;
+    private bool _errorShown;
 
     public TrayApplicationContext(HttpClient httpClient, IReadOnlyList<ISimReportFetcher> simFetchers)
     {
@@ -29,6 +32,8 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _logo = AppIcon.LoadLogoBitmap();
         _appIcon = AppIcon.CreateTrayIcon(_logo);
+        _syncingIcon = AppIcon.CreateTrayIcon(_logo, Theme.Accent);
+        _errorIcon = AppIcon.CreateTrayIcon(_logo, Theme.Error);
 
         if (string.IsNullOrWhiteSpace(_config.SavedVariablesFilePath))
         {
@@ -40,7 +45,11 @@ public sealed class TrayApplicationContext : ApplicationContext
             }
         }
 
-        var menu = new ContextMenuStrip();
+        var menu = new ContextMenuStrip
+        {
+            Renderer = new ToolStripProfessionalRenderer(new TrayMenuColorTable()),
+            ForeColor = Theme.Text,
+        };
         menu.Items.Add("Sync now", null, async (_, _) => await SyncNowAsync());
         menu.Items.Add("Open WoW folder", null, (_, _) => OpenWowFolder());
         menu.Items.Add("Settings...", null, (_, _) => OpenSettings());
@@ -107,11 +116,14 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _syncing = true;
         _trayIcon.Text = "KART Companion — syncing...";
+        _trayIcon.Icon = _syncingIcon;
 
         var result = await RunSyncWithConfigAsync(_config);
+        _syncing = false;
 
         if (result.Success)
         {
+            _errorShown = false;
             UpdateTooltip();
             if (result.SkippedCharacters > 0)
             {
@@ -124,8 +136,6 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             ShowError(result.ErrorMessage ?? "Unknown sync error.");
         }
-
-        _syncing = false;
     }
 
     // Shared by the tray "Sync now" menu item, the background timer, and the Settings dialog's
@@ -152,6 +162,8 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void ShowError(string message)
     {
+        _errorShown = true;
+        _trayIcon.Icon = _errorIcon;
         _trayIcon.Text = "KART Companion — sync failed";
         _trayIcon.BalloonTipTitle = "KART Companion — sync failed";
         _trayIcon.BalloonTipText = message;
@@ -160,6 +172,16 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void UpdateTooltip()
     {
+        // Only reset to idle if nothing is syncing and no error is currently shown.
+        // _syncing guards against OpenSettings()'s UpdateTooltip() call clobbering a
+        // *different*, still-in-flight sync's icon. _errorShown guards against the same
+        // call clearing a red error dot just because Settings was saved — the spec requires
+        // the error icon to persist until the next successful sync, not just until any
+        // config save.
+        if (!_syncing && !_errorShown)
+        {
+            _trayIcon.Icon = _appIcon;
+        }
         var last = _config.LastSyncUtc is { } t ? t.ToLocalTime().ToString("g") : "never";
         // NotifyIcon.Text has a 63-character limit.
         var text = $"KART Companion — last sync: {last}";
@@ -179,6 +201,8 @@ public sealed class TrayApplicationContext : ApplicationContext
             _trayIcon.Dispose();
             _syncTimer.Dispose();
             _appIcon.Dispose();
+            _syncingIcon.Dispose();
+            _errorIcon.Dispose();
             _logo.Dispose();
         }
         base.Dispose(disposing);

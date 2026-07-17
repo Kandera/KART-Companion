@@ -79,6 +79,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private void ApplyIntervalToTimer()
     {
         _syncTimer.Stop();
+        if (!_config.AutoSyncEnabled) return;
         _syncTimer.Interval = Math.Max(1, _config.SyncIntervalMinutes) * 60 * 1000;
         _syncTimer.Start();
     }

@@ -8,12 +8,20 @@ namespace KARTCompanion;
 /// match the addon's own branding (Theme.cs, colors lifted from KAimg.jpg).</summary>
 public sealed class SettingsForm : Form
 {
+    private const int RailWidth = 64;
+    private const int ContentLeft = RailWidth + 16;
+    private const int ContentWidth = 396;
+
     private readonly TextBox _groupKeyBox;
     private readonly TextBox _wowPathBox;
-    private readonly NumericUpDown _intervalBox;
+    private readonly TextBox _intervalBox;
+    private readonly Theme.ToggleSwitch _autoSyncToggle;
     private readonly Label _statusLabel;
     private readonly Button _forceSyncButton;
     private readonly Func<CompanionConfig, Task<SyncResult>> _runSync;
+    private readonly Panel _rail;
+    private readonly Panel _railStatusDot;
+    private readonly Panel _liveStatusDot;
 
     private string? _resolvedSavedVariablesPath;
     private readonly SyncGate _syncGate = new();
@@ -28,74 +36,151 @@ public sealed class SettingsForm : Form
 
         Text = "KART Companion — Settings";
         Icon = icon;
-        FormBorderStyle = FormBorderStyle.FixedDialog;
+        // No native title bar: the approved mockup is a borderless, rounded floating card with
+        // the logo/title drawn inside the body, not a light OS title bar sitting on top of a
+        // dark client area. FormBorderStyle.None removes that bar (and, with it, the window's
+        // only means of being dragged or closed by mouse — both are rebuilt below).
+        FormBorderStyle = FormBorderStyle.None;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         Theme.StyleForm(this);
 
+        // Icon rail: a narrow navigation-style column separating the logo/status glance from the
+        // form fields, instead of the logo sitting inline with the title. Height is set to the
+        // dialog's final height once the rest of the layout is measured (see LayoutBelowStatusLabel).
+        _rail = new Panel { Left = 0, Top = 0, Width = RailWidth };
+        Theme.StylePanel(_rail, Theme.RailBackground);
+        Theme.MakeDragHandle(_rail, this);
+
+        var railDivider = new Panel { Left = RailWidth, Top = 0, Width = 1, BackColor = Theme.BorderStrong };
+
+        var closeGlyph = Theme.CreateCloseGlyph(Close);
+        closeGlyph.Left = ContentLeft + ContentWidth - closeGlyph.Width + 8;
+        closeGlyph.Top = 12;
+
         var logoBox = new PictureBox
         {
             Image = logo,
             SizeMode = PictureBoxSizeMode.Zoom,
-            Left = 12,
-            Top = 12,
-            Width = 36,
-            Height = 36,
+            Left = (RailWidth - 34) / 2,
+            Top = 20,
+            Width = 34,
+            Height = 34,
         };
 
+        // Single active nav glyph under the logo — a "you are here" marker for the one screen
+        // this app has, with a thin accent bar to its left, not a second, unclickable nav item
+        // (that would imply a multi-page rail that doesn't exist).
+        var activeIcon = Theme.CreateIcon(Theme.IconGlyph.Sliders, Theme.Text, 16);
+        activeIcon.Left = (RailWidth - activeIcon.Width) / 2;
+        activeIcon.Top = 72;
+        var activeBar = new Panel { Left = activeIcon.Left - 12, Top = activeIcon.Top - 1, Width = 3, Height = 18, BackColor = Theme.Accent };
+
+        _railStatusDot = Theme.CreateStatusDot(Theme.TextDim);
+        _railStatusDot.Left = (RailWidth - _railStatusDot.Width) / 2;
+        _rail.Controls.AddRange(new Control[] { logoBox, activeBar, activeIcon, _railStatusDot });
+
+        // AutoSize (not a fixed Width spanning the whole content column) so the label's hit-test
+        // area hugs the short "KART Companion" text instead of silently overlapping the close
+        // glyph's hitbox further right, which would swallow its clicks.
         var titleLabel = new Label
         {
             Text = "KART Companion",
-            Left = 58,
-            Top = 18,
-            Width = 300,
-            Font = new Font(Font.FontFamily, 13, FontStyle.Bold),
+            Left = ContentLeft,
+            Top = 20,
+            AutoSize = true,
+            Font = new Font(Font.FontFamily, 14, FontStyle.Bold),
         };
         Theme.StyleLabel(titleLabel);
 
-        var divider = new Panel { Left = 12, Top = 56, Width = 396, Height = 1, BackColor = Theme.AccentDim };
+        var subtitleLabel = new Label { Text = "Settings", Left = ContentLeft, Top = 47, AutoSize = true };
+        Theme.StyleLabel(subtitleLabel, dim: true);
+        Theme.MakeDragHandle(titleLabel, this);
+        Theme.MakeDragHandle(subtitleLabel, this);
 
-        var groupKeyLabel = new Label { Text = "WoWUtils group key:", Left = 12, Top = 68, Width = 250 };
-        Theme.StyleLabel(groupKeyLabel);
-        _groupKeyBox = new TextBox { Left = 12, Top = 88, Width = 396, UseSystemPasswordChar = true, Text = current.GroupKey ?? "" };
-        Theme.StyleTextBox(_groupKeyBox);
+        var divider = new Panel { Left = ContentLeft, Top = 78, Width = ContentWidth, Height = 1, BackColor = Theme.AccentDim };
 
-        var wowPathLabel = new Label { Text = "WoW install folder (contains \"_retail_\"):", Left = 12, Top = 136, Width = 300 };
-        Theme.StyleLabel(wowPathLabel);
-        _wowPathBox = new TextBox { Left = 12, Top = 156, Width = 316 };
-        Theme.StyleTextBox(_wowPathBox);
-        var browseButton = new Button { Text = "Browse...", Left = 334, Top = 155, Width = 74 };
-        Theme.StyleButton(browseButton);
+        var groupKeyLabel = new Label { Text = "WoWUtils group key:", Left = ContentLeft, Top = 92, AutoSize = true };
+        Theme.StyleLabel(groupKeyLabel, dim: true);
+        var groupKeyRow = Theme.CreateInputRow(ContentWidth, 38, Theme.IconGlyph.Key, out _groupKeyBox, passwordChar: true);
+        groupKeyRow.Left = ContentLeft;
+        groupKeyRow.Top = 112;
+        _groupKeyBox.Text = current.GroupKey ?? "";
+
+        var wowPathLabel = new Label { Text = "WoW install folder (contains \"_retail_\"):", Left = ContentLeft, Top = 168, AutoSize = true };
+        Theme.StyleLabel(wowPathLabel, dim: true);
+        var browseButton = Theme.CreateButton("Browse...", surfaceColor: Theme.Panel);
+        browseButton.Width = 74;
+        browseButton.Height = 26;
         browseButton.Click += (_, _) => BrowseForWowFolder();
+        var wowPathRow = Theme.CreateInputRow(ContentWidth, 38, Theme.IconGlyph.Folder, out _wowPathBox, rightPadding: browseButton.Width + 6);
+        wowPathRow.Left = ContentLeft;
+        wowPathRow.Top = 188;
+        browseButton.Left = ContentWidth - browseButton.Width - 6;
+        browseButton.Top = (wowPathRow.Height - browseButton.Height) / 2;
+        wowPathRow.Controls.Add(browseButton);
+        _wowPathBox.Text = current.WowInstallPath ?? "";
 
-        var divider2 = new Panel { Left = 12, Top = 186, Width = 396, Height = 1, BackColor = Theme.AccentDim };
+        var divider2 = new Panel { Left = ContentLeft, Top = 242, Width = ContentWidth, Height = 1, BackColor = Theme.AccentDim };
 
-        var intervalLabel = new Label { Text = "Sync interval (minutes):", Left = 12, Top = 198, Width = 200 };
-        Theme.StyleLabel(intervalLabel);
-        _intervalBox = new NumericUpDown { Left = 12, Top = 218, Width = 80, Minimum = 1, Maximum = 240, Value = Math.Clamp(current.SyncIntervalMinutes, 1, 240) };
-        Theme.StyleNumericUpDown(_intervalBox);
+        var intervalLabel = new Label { Text = "Sync interval:", Left = ContentLeft, Top = 256, AutoSize = true };
+        Theme.StyleLabel(intervalLabel, dim: true);
+
+        // A clock-icon field for the number, restricted to digits, instead of a native
+        // NumericUpDown — its built-in spinner buttons don't exist in the approved design and
+        // can't be restyled to match the rest of the rounded, icon-prefixed fields.
+        var intervalRow = Theme.CreateInputRow(140, 38, Theme.IconGlyph.Clock, out _intervalBox, rightPadding: 30);
+        intervalRow.Left = ContentLeft;
+        intervalRow.Top = 276;
+        _intervalBox.Text = Math.Clamp(current.SyncIntervalMinutes, 1, 240).ToString();
+        _intervalBox.KeyPress += (_, e) => { if (!char.IsDigit(e.KeyChar) && e.KeyChar != (char)Keys.Back) e.Handled = true; };
+        var minLabel = new Label { Text = "Min", AutoSize = true };
+        Theme.StyleLabel(minLabel, dim: true);
+        minLabel.Left = intervalRow.Width - minLabel.PreferredWidth - 10;
+        minLabel.Top = (intervalRow.Height - minLabel.PreferredHeight) / 2;
+        intervalRow.Controls.Add(minLabel);
+
+        _autoSyncToggle = Theme.CreateToggleSwitch(current.AutoSyncEnabled);
+        _autoSyncToggle.Left = ContentLeft + 180;
+        _autoSyncToggle.Top = intervalRow.Top + (intervalRow.Height - _autoSyncToggle.Height) / 2;
+        var autoSyncLabel = new Label { Text = "Automatisch synchronisieren", AutoSize = true };
+        Theme.StyleLabel(autoSyncLabel, dim: true);
+        autoSyncLabel.Left = _autoSyncToggle.Right + 8;
+        autoSyncLabel.Top = intervalRow.Top + (intervalRow.Height - autoSyncLabel.PreferredHeight) / 2;
+
+        // A compact "live" row (small dot + one status line) instead of a bare block of text —
+        // mirrors the rail's health dot right next to the text it explains.
+        _liveStatusDot = Theme.CreateStatusDot(Theme.TextDim);
+        _liveStatusDot.Left = ContentLeft;
+        _liveStatusDot.Top = 332;
 
         // AutoSize + MaximumSize lets this grow downward to however many lines a long path
         // actually needs, instead of clipping it at a guessed fixed height.
         _statusLabel = new Label
         {
-            Left = 12,
-            Top = 248,
-            Width = 396,
+            Left = ContentLeft + _liveStatusDot.Width + 8,
+            Top = 328,
+            Width = ContentWidth - _liveStatusDot.Width - 8,
             AutoSize = true,
-            MaximumSize = new System.Drawing.Size(396, 0),
+            MaximumSize = new System.Drawing.Size(ContentWidth - _liveStatusDot.Width - 8, 0),
+            Font = new Font(Font.FontFamily, 8f),
         };
         SetStatusText(BuildInitialStatusText(current), isError: false);
+        UpdateRailStatusDot(isError: false);
 
-        _forceSyncButton = new Button { Text = "Force Sync", Left = 12, Width = 100 };
-        Theme.StyleButton(_forceSyncButton);
+        _forceSyncButton = Theme.CreateButton("Force Sync");
+        _forceSyncButton.Left = ContentLeft;
+        _forceSyncButton.Width = 100;
         _forceSyncButton.Click += async (_, _) => await OnForceSyncAsync();
 
-        var okButton = new Button { Text = "OK", Width = 75, DialogResult = DialogResult.OK };
-        Theme.StyleButton(okButton, primary: true);
-        var cancelButton = new Button { Text = "Cancel", Width = 75, DialogResult = DialogResult.Cancel };
-        Theme.StyleButton(cancelButton);
+        var cancelButton = Theme.CreateButton("Cancel");
+        cancelButton.Width = 75;
+        cancelButton.DialogResult = DialogResult.Cancel;
+
+        var okButton = Theme.CreateButton("OK", primary: true);
+        okButton.Width = 75;
+        okButton.DialogResult = DialogResult.OK;
         okButton.Click += (_, _) => OnOk();
 
         AcceptButton = okButton;
@@ -103,24 +188,47 @@ public sealed class SettingsForm : Form
 
         Controls.AddRange(new Control[]
         {
-            logoBox, titleLabel, divider,
-            groupKeyLabel, _groupKeyBox, wowPathLabel, _wowPathBox, browseButton,
+            _rail, railDivider, titleLabel, subtitleLabel, closeGlyph, divider,
+            groupKeyLabel, groupKeyRow, wowPathLabel, wowPathRow,
             divider2,
-            intervalLabel, _intervalBox, _statusLabel, _forceSyncButton, okButton, cancelButton,
+            intervalLabel, intervalRow, _autoSyncToggle, autoSyncLabel,
+            _liveStatusDot, _statusLabel, _forceSyncButton, cancelButton, okButton,
         });
 
         LayoutBelowStatusLabel();
+        // ApplyRoundedFormRegion re-subscribes to Resize internally, so this needs to run only
+        // once — later ClientSize changes from LayoutBelowStatusLabel already trigger Resize,
+        // which re-applies the rounded Region on its own.
+        Theme.ApplyRoundedFormRegion(this);
         _statusLabel.SizeChanged += (_, _) => LayoutBelowStatusLabel();
 
         void LayoutBelowStatusLabel()
         {
-            var y = _statusLabel.Top + _statusLabel.Height + 12;
+            var y = Math.Max(_statusLabel.Top + _statusLabel.Height, _liveStatusDot.Bottom) + 14;
             _forceSyncButton.Top = y;
-            okButton.Top = cancelButton.Top = y;
-            okButton.Left = 252;
-            cancelButton.Left = 333;
-            ClientSize = new System.Drawing.Size(420, y + 40);
+            cancelButton.Top = okButton.Top = y;
+            _forceSyncButton.Left = ContentLeft;
+            cancelButton.Left = ContentLeft + _forceSyncButton.Width + 8;
+            okButton.Left = ContentLeft + ContentWidth - okButton.Width;
+            ClientSize = new System.Drawing.Size(ContentLeft + ContentWidth + 12, y + 40);
+            _rail.Height = ClientSize.Height;
+            railDivider.Height = ClientSize.Height;
+            _railStatusDot.Top = _rail.Height - 30;
         }
+    }
+
+    // Mirrors the status text's color-coding on both the rail dot and the inline live-status
+    // dot, so sync health reads at a glance without having to read the status text: green once a
+    // SavedVariables file is resolved, red on error, dim gray while still unconfigured.
+    private void UpdateRailStatusDot(bool isError)
+    {
+        var color = isError
+            ? Theme.Error
+            : _resolvedSavedVariablesPath is not null
+                ? Theme.Success
+                : Theme.TextDim;
+        Theme.SetStatusDotColor(_railStatusDot, color);
+        Theme.SetStatusDotColor(_liveStatusDot, color);
     }
 
     private static string BuildInitialStatusText(CompanionConfig current) =>
@@ -168,13 +276,16 @@ public sealed class SettingsForm : Form
             _resolvedSavedVariablesPath = matches.OrderByDescending(File.GetLastWriteTimeUtc).First();
             SetStatusText("SavedVariables file: " + _resolvedSavedVariablesPath, isError: false);
         }
+        UpdateRailStatusDot(isError: _resolvedSavedVariablesPath is null);
     }
 
     private CompanionConfig BuildResultFromFields() => new()
     {
         GroupKey = _groupKeyBox.Text.Trim(),
+        WowInstallPath = string.IsNullOrWhiteSpace(_wowPathBox.Text) ? null : _wowPathBox.Text.Trim(),
         SavedVariablesFilePath = _resolvedSavedVariablesPath,
-        SyncIntervalMinutes = (int)_intervalBox.Value,
+        SyncIntervalMinutes = Math.Clamp(int.TryParse(_intervalBox.Text, out var minutes) ? minutes : 15, 1, 240),
+        AutoSyncEnabled = _autoSyncToggle.IsOn,
         LastSyncUtc = Result.LastSyncUtc,
     };
 
@@ -209,10 +320,12 @@ public sealed class SettingsForm : Form
             Result = config;
             var skippedNote = result.SkippedCharacters > 0 ? $" ({result.SkippedCharacters} skipped)" : "";
             SetStatusText($"Synced {result.PlayerCount} players{skippedNote}. SavedVariables file: {config.SavedVariablesFilePath}", StatusKind.Success);
+            UpdateRailStatusDot(isError: false);
         }
         else
         {
             SetStatusText("Sync failed: " + (result.ErrorMessage ?? "unknown error"), isError: true);
+            UpdateRailStatusDot(isError: true);
         }
 
         _forceSyncButton.Enabled = true;

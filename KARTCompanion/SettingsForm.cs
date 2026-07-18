@@ -16,6 +16,7 @@ public sealed class SettingsForm : Form
     private readonly TextBox _wowPathBox;
     private readonly TextBox _intervalBox;
     private readonly Theme.ToggleSwitch _autoSyncToggle;
+    private readonly Theme.ToggleSwitch _autoStartToggle;
     private readonly Label _statusLabel;
     private readonly Button _forceSyncButton;
     private readonly Func<CompanionConfig, Task<SyncResult>> _runSync;
@@ -149,18 +150,29 @@ public sealed class SettingsForm : Form
         autoSyncLabel.Left = _autoSyncToggle.Right + 8;
         autoSyncLabel.Top = intervalRow.Top + (intervalRow.Height - autoSyncLabel.PreferredHeight) / 2;
 
+        // Windows-Autostart lives in the registry Run key, not in config.json — the toggle's
+        // initial state is read straight from there so it always reflects reality (e.g. the user
+        // removed the entry via Task Manager's Startup tab).
+        _autoStartToggle = Theme.CreateToggleSwitch(AutoStart.IsEnabled());
+        _autoStartToggle.Left = ContentLeft;
+        _autoStartToggle.Top = 328;
+        var autoStartLabel = new Label { Text = "Mit Windows starten", AutoSize = true };
+        Theme.StyleLabel(autoStartLabel, dim: true);
+        autoStartLabel.Left = _autoStartToggle.Right + 8;
+        autoStartLabel.Top = _autoStartToggle.Top + (_autoStartToggle.Height - autoStartLabel.PreferredHeight) / 2;
+
         // A compact "live" row (small dot + one status line) instead of a bare block of text —
         // mirrors the rail's health dot right next to the text it explains.
         _liveStatusDot = Theme.CreateStatusDot(Theme.TextDim);
         _liveStatusDot.Left = ContentLeft;
-        _liveStatusDot.Top = 332;
+        _liveStatusDot.Top = 372;
 
         // AutoSize + MaximumSize lets this grow downward to however many lines a long path
         // actually needs, instead of clipping it at a guessed fixed height.
         _statusLabel = new Label
         {
             Left = ContentLeft + _liveStatusDot.Width + 8,
-            Top = 328,
+            Top = 368,
             Width = ContentWidth - _liveStatusDot.Width - 8,
             AutoSize = true,
             MaximumSize = new System.Drawing.Size(ContentWidth - _liveStatusDot.Width - 8, 0),
@@ -192,6 +204,7 @@ public sealed class SettingsForm : Form
             groupKeyLabel, groupKeyRow, wowPathLabel, wowPathRow,
             divider2,
             intervalLabel, intervalRow, _autoSyncToggle, autoSyncLabel,
+            _autoStartToggle, autoStartLabel,
             _liveStatusDot, _statusLabel, _forceSyncButton, cancelButton, okButton,
         });
 
@@ -292,6 +305,9 @@ public sealed class SettingsForm : Form
     private void OnOk()
     {
         Result = BuildResultFromFields();
+        // Applied only on OK (not live on toggle click) so Cancel really cancels. Written
+        // unconditionally: re-enabling refreshes a stale exe path after the app was moved.
+        AutoStart.SetEnabled(_autoStartToggle.IsOn);
     }
 
     private async Task OnForceSyncAsync()

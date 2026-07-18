@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.4.0] - 2026-07-18
+
+### Added
+- **"Mit Windows starten" toggle in Settings.** Registers the app in the per-user registry Run
+  key (no admin needed); the toggle reads its state straight from the registry, so it stays in
+  sync even if the entry is removed via Task Manager.
+
 ## [1.3.0] - 2026-07-17
 
 ### Changed

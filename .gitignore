@@ -3,3 +3,4 @@ obj/
 publish/
 *.user
 .worktrees/
+.vscode/mcp.json

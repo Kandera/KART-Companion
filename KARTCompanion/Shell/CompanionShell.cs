@@ -21,6 +21,7 @@ public sealed class CompanionShell : Form
     private readonly Control _closeGlyph;
     private readonly Label _subtitleLabel;
     private readonly Panel _headerDivider;
+    private readonly Panel _railStatusDot;
     private readonly List<(IScreen Screen, Control Icon, Panel AccentBar)> _navItems = new();
 
     public IScreen Current { get; private set; }
@@ -31,7 +32,6 @@ public sealed class CompanionShell : Form
         _screens = screens;
         Current = screens[0];
 
-        Text = "KART Companion";
         Icon = icon;
         // No native title bar: the approved mockup is a borderless, rounded floating card with
         // the logo/title drawn inside the body, not a light OS title bar sitting on top of a
@@ -65,6 +65,13 @@ public sealed class CompanionShell : Form
             Height = 34,
         };
         _rail.Controls.Add(logoBox);
+
+        // Mirrors whichever screen is current's StatusColor — a health-at-a-glance dot the rail
+        // renders without knowing what "health" means for that screen (see IScreen). Position
+        // tracks the rail's own height (see SyncFrameToCurrentScreen), same as before.
+        _railStatusDot = Theme.CreateStatusDot(Theme.TextDim);
+        _railStatusDot.Left = (RailWidth - _railStatusDot.Width) / 2;
+        _rail.Controls.Add(_railStatusDot);
 
         // AutoSize (not a fixed Width spanning the whole content column) so the label's hit-test
         // area hugs the short "KART Companion" text instead of silently overlapping the close
@@ -112,6 +119,7 @@ public sealed class CompanionShell : Form
             screen.View.Location = Point.Empty;
             screen.View.Visible = screen == Current;
             screen.View.SizeChanged += (_, _) => { if (screen == Current) SyncFrameToCurrentScreen(); };
+            screen.StatusChanged += (_, _) => { if (screen == Current) UpdateRailStatusDot(); };
             Controls.Add(screen.View);
         }
 
@@ -140,8 +148,10 @@ public sealed class CompanionShell : Form
         foreach (var (s, _, accentBar) in _navItems) accentBar.Visible = s == screen;
         foreach (var s in _screens) s.View.Visible = s == screen;
         Current = screen;
+        Text = $"KART Companion — {screen.Title}";
         _subtitleLabel.Text = screen.Title;
         SyncFrameToCurrentScreen();
+        UpdateRailStatusDot();
     }
 
     // The shell sizes itself to whatever the current screen needs, rather than assuming a fixed
@@ -155,5 +165,14 @@ public sealed class CompanionShell : Form
         _railDivider.Height = ClientSize.Height;
         _headerDivider.Width = Current.View.Width - ContentLeft - 12;
         _closeGlyph.Left = Current.View.Width - _closeGlyph.Width - 4;
+        _railStatusDot.Top = _rail.Height - 30;
+    }
+
+    // Renders whatever the current screen reports — null means "no dot for this screen".
+    private void UpdateRailStatusDot()
+    {
+        var color = Current.StatusColor;
+        _railStatusDot.Visible = color.HasValue;
+        if (color.HasValue) Theme.SetStatusDotColor(_railStatusDot, color.Value);
     }
 }

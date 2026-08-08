@@ -31,6 +31,9 @@ public sealed class SettingsScreen : IScreen
     public Theme.IconGlyph Glyph => Theme.IconGlyph.Sliders;
     public Control View => _view;
 
+    public Color? StatusColor { get; private set; }
+    public event EventHandler? StatusChanged;
+
     public CompanionConfig Result { get; private set; }
 
     /// <summary>Raised once, when OK is pressed, carrying the config to persist. Cancel raises
@@ -177,10 +180,9 @@ public sealed class SettingsScreen : IScreen
     }
 
     // Colors the inline live-status dot next to the status text: green once a SavedVariables
-    // file is resolved, red on error, dim gray while still unconfigured. This used to also color
-    // a second dot embedded in the shell's icon rail — dropped when Settings moved into the
-    // shell, since the shell owns the rail and knows nothing about a screen's sync state (see
-    // IScreen's doc comment on the frame/content split).
+    // file is resolved, red on error, dim gray while still unconfigured. Also pushes the same
+    // color out as StatusColor/StatusChanged so the shell's rail dot — which has no idea what
+    // "sync health" means — can mirror it without this class reaching into rail-owned chrome.
     private void UpdateStatusDot(bool isError)
     {
         var color = isError
@@ -189,6 +191,8 @@ public sealed class SettingsScreen : IScreen
                 ? Theme.Success
                 : Theme.TextDim;
         Theme.SetStatusDotColor(_liveStatusDot, color);
+        StatusColor = color;
+        StatusChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private static string BuildInitialStatusText(CompanionConfig current) =>

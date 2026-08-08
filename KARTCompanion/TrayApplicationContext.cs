@@ -124,7 +124,19 @@ public sealed class TrayApplicationContext : ApplicationContext
             UpdateTooltip();
         };
 
-        _shell = new CompanionShell(new IScreen[] { settingsScreen }, _logo, _appIcon);
+        ArchiveDocument archiveDoc;
+        try
+        {
+            archiveDoc = ArchiveStore.Load();
+        }
+        catch (ArchiveUnreadableException ex)
+        {
+            Notify($"The loot history archive could not be read and was kept at {ex.QuarantinePath}. A new one was started.");
+            archiveDoc = new ArchiveDocument();
+        }
+        var historyScreen = new HistoryScreen(archiveDoc);
+
+        _shell = new CompanionShell(new IScreen[] { settingsScreen, historyScreen }, _logo, _appIcon);
         _shell.FormClosed += (_, _) =>
         {
             _shell = null;

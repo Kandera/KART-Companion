@@ -221,4 +221,82 @@ public class ArchiveStoreTests : IDisposable
         Fields = new Dictionary<string, object?> { ["id"] = id, ["time"] = 1785356434d },
         SourceFile = @"C:\wow\file.lua",
     };
+
+    [Fact]
+    public void SaveAndLoad_RoundTripsEditsAndExclusion()
+    {
+        var doc = new ArchiveDocument();
+        doc.Awards.Add(new ArchivedAward
+        {
+            Fields = new Dictionary<string, object?> { ["id"] = "a1", ["winner"] = "Bramblewick", ["reason"] = "BIS" },
+            Edits = new Dictionary<string, string> { ["winner"] = "Thornfell" },
+            ExcludedFromExport = true,
+        });
+
+        ArchiveStore.Save(doc, Path_);
+        var loaded = ArchiveStore.Load(Path_);
+
+        var award = Assert.Single(loaded.Awards);
+        Assert.Equal("Thornfell", Assert.Contains("winner", award.Edits));
+        Assert.True(award.ExcludedFromExport);
+        // Fields is a verbatim copy of what the addon wrote and stays that way.
+        Assert.Equal("Bramblewick", award.Fields["winner"]);
+    }
+
+    // An archive written before this feature existed has neither property. It must load, not
+    // quarantine: this is the maintainer's real file.
+    [Fact]
+    public void Load_ArchiveWithoutEditsOrExclusion_LoadsWithDefaults()
+    {
+        File.WriteAllText(Path_,
+            """{"Version":1,"Awards":[{"Fields":{"id":"a1","winner":"Bramblewick"},"SourceFile":"x.lua","Withdrawn":false}]}""");
+
+        var loaded = ArchiveStore.Load(Path_);
+
+        var award = Assert.Single(loaded.Awards);
+        Assert.Empty(award.Edits);
+        Assert.False(award.ExcludedFromExport);
+    }
+
+    [Fact]
+    public void EffectiveFields_OverlaysEditsWithoutTouchingFields()
+    {
+        var award = new ArchivedAward
+        {
+            Fields = new Dictionary<string, object?> { ["id"] = "a1", ["winner"] = "Bramblewick", ["reason"] = "BIS" },
+            Edits = new Dictionary<string, string> { ["winner"] = "Thornfell" },
+        };
+
+        Assert.Equal("Thornfell", award.EffectiveFields["winner"]);
+        Assert.Equal("BIS", award.EffectiveFields["reason"]);
+        Assert.Equal("Bramblewick", award.Fields["winner"]);
+    }
+
+    // An edit for a field the addon never wrote must appear, not be swallowed by the overlay.
+    [Fact]
+    public void EffectiveFields_AddsAFieldTheAddonNeverWrote()
+    {
+        var award = new ArchivedAward
+        {
+            Fields = new Dictionary<string, object?> { ["id"] = "a1" },
+            Edits = new Dictionary<string, string> { ["reason"] = "BIS" },
+        };
+
+        Assert.Equal("BIS", award.EffectiveFields["reason"]);
+        Assert.False(award.Fields.ContainsKey("reason"));
+    }
+
+    // Key is derived from Fields["id"], which is not editable — but an edit dictionary that somehow
+    // carried an id must not be able to move an award's identity.
+    [Fact]
+    public void Key_IgnoresEdits()
+    {
+        var award = new ArchivedAward
+        {
+            Fields = new Dictionary<string, object?> { ["id"] = "a1" },
+            Edits = new Dictionary<string, string> { ["id"] = "a2" },
+        };
+
+        Assert.Equal("a1", award.Key);
+    }
 }

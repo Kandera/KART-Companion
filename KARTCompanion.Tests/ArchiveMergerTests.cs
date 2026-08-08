@@ -543,4 +543,39 @@ public class ArchiveMergerTests
 
         Assert.All(doc.Awards.Where(x => x.Key is "a" or "b"), x => Assert.False(x.Withdrawn));
     }
+
+    // The whole reason edits live outside Fields. ApplyFields writes exactly the keys the incoming
+    // snapshot carries, and the addon's snapshot always carries the ORIGINAL winner — because the
+    // Companion never writes back into the game. If an edit lived in Fields, the very next sync would
+    // silently undo it.
+    [Fact]
+    public void Merge_DoesNotClearAnEditOrAnExclusion()
+    {
+        var doc = new ArchiveDocument();
+        doc.Awards.Add(new ArchivedAward
+        {
+            Fields = new Dictionary<string, object?>
+            {
+                ["id"] = "a1", ["time"] = 100d, ["epoch"] = 1d, ["winner"] = "Bramblewick",
+            },
+            SourceFile = "acct.lua",
+            Edits = new Dictionary<string, string> { ["winner"] = "Thornfell" },
+            ExcludedFromExport = true,
+        });
+
+        var snapshot = new[]
+        {
+            new LootHistoryEntry(new Dictionary<string, object?>
+            {
+                ["id"] = "a1", ["time"] = 100d, ["epoch"] = 1d, ["winner"] = "Bramblewick",
+            }),
+        };
+
+        ArchiveMerger.Merge(doc, snapshot, "acct.lua", DateTimeOffset.UnixEpoch);
+
+        var award = Assert.Single(doc.Awards);
+        Assert.Equal("Thornfell", award.Edits["winner"]);
+        Assert.True(award.ExcludedFromExport);
+        Assert.Equal("Thornfell", award.EffectiveFields["winner"]);
+    }
 }

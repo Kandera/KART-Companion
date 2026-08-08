@@ -56,4 +56,26 @@ public class SettingsScreenTests
 
         Assert.Equal("Last sync 22:41", SettingsScreenText.BuildLastSyncText(syncedAt, zone));
     }
+
+    // The row sits a fixed margin above the bottom edge, and the button's OWN height decides where
+    // its top goes. The previous version hard-coded a row height of 30 against buttons Theme.cs
+    // builds 34 tall, so the real margin was 36 and nothing could see it — the layout arithmetic is
+    // otherwise entirely untested, because nothing in this suite constructs a Form.
+    [Fact]
+    public void ActionRowTop_LeavesTheMarginBelowTheButtonsOwnHeight()
+    {
+        var top = SettingsScreenText.ActionRowTop(viewHeight: 700, buttonHeight: 34);
+
+        Assert.Equal(626, top);
+        Assert.Equal(SettingsScreenText.ActionRowBottomMargin, 700 - (top + 34));
+    }
+
+    // A taller button must move the row UP, not push it through the bottom edge.
+    [Fact]
+    public void ActionRowTop_TallerButtonKeepsTheSameBottomMargin()
+    {
+        var top = SettingsScreenText.ActionRowTop(viewHeight: 700, buttonHeight: 50);
+
+        Assert.Equal(SettingsScreenText.ActionRowBottomMargin, 700 - (top + 50));
+    }
 }

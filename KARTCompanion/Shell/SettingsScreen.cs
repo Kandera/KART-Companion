@@ -33,6 +33,10 @@ public sealed class SettingsScreen : IScreen
     private readonly Theme.ToggleSwitch _autoStartToggle;
     private readonly Label _statusLabel;
     private readonly Label _lastSyncLabel;
+    // Deliberately never disposed. A ToolTip is a Component, not a Control, so it is not in the
+    // hosting Form's automatic disposal chain — but this screen is constructed exactly once, by
+    // TrayApplicationContext, and lives as long as the process does. Adding an IDisposable to
+    // IScreen for one field nothing ever releases early would cost more than it buys.
     private readonly ToolTip _statusTooltip = new();
     private readonly Button _forceSyncButton;
     private readonly Func<CompanionConfig, Task<SyncResult>> _runSync;
@@ -194,23 +198,25 @@ public sealed class SettingsScreen : IScreen
         statusCard.Controls.AddRange(new Control[] { _liveStatusDot, _statusLabel, _lastSyncLabel });
 
         // --- buttons ---
-        // Pinned to the bottom of the shared frame, not trailing the status card. Settings has far
-        // less content than the history screen the shared height is set by, so following the card
-        // left the actions stranded mid-window above a stretch of empty background, which reads as
-        // an unfinished layout. Content at the top, actions at the bottom is what every settings
+        // Pinned to the bottom of the view, not trailing the status card. Settings has far less
+        // content than the history screen whose height the shared frame is set by, so following the
+        // card left the actions stranded mid-window above a stretch of empty background, which reads
+        // as an unfinished layout. Content at the top, actions at the bottom is what every settings
         // dialog does, and it turns that same empty stretch into deliberate breathing room.
-        const int ButtonRowHeight = 30;
-        var buttonsTop = CompanionShell.ScreenSize.Height - 40 - ButtonRowHeight;
-
+        //
+        // Positioned from _view.Height in a SizeChanged handler rather than from the shell's own
+        // size constant. The shell sets View.Size AFTER this constructor has run, so the height is
+        // not knowable here — and reaching for CompanionShell.ScreenSize to learn it would break the
+        // rule IScreen states outright: "a screen owns its own layout and knows nothing about the
+        // frame." Reacting to its own view being resized keeps the screen inside that rule, and is
+        // what a resizable window will need from this layout anyway.
         _forceSyncButton = Theme.CreateButton("Force Sync");
         _forceSyncButton.Left = ContentLeft;
-        _forceSyncButton.Top = buttonsTop;
         _forceSyncButton.Width = 100;
         _forceSyncButton.Click += async (_, _) => await OnForceSyncAsync();
 
         var cancelButton = Theme.CreateButton("Cancel");
         cancelButton.Left = _forceSyncButton.Right + 8;
-        cancelButton.Top = buttonsTop;
         cancelButton.Width = 75;
         // No native title bar means no DialogResult/ShowDialog() magic to close the window for
         // us (that only auto-closes a modally-shown Form) — the shell now hosts more than one
@@ -222,7 +228,6 @@ public sealed class SettingsScreen : IScreen
         var okButton = Theme.CreateButton("OK", primary: true);
         okButton.Width = 75;
         okButton.Left = ContentLeft + ContentWidth - okButton.Width;
-        okButton.Top = buttonsTop;
         okButton.Click += (_, _) => { OnOk(); _view.FindForm()?.Close(); };
 
         AcceptButton = okButton;
@@ -234,6 +239,18 @@ public sealed class SettingsScreen : IScreen
             statusCaption, statusCard,
             _forceSyncButton, cancelButton, okButton,
         });
+
+        // Measured off the buttons themselves, never a hard-coded row height: Theme.CreateButton
+        // decides how tall a button is, and a guessed constant beside it is a number that silently
+        // stops being true the day that changes.
+        void LayoutActionRow()
+        {
+            var top = SettingsScreenText.ActionRowTop(_view.Height, okButton.Height);
+            _forceSyncButton.Top = cancelButton.Top = okButton.Top = top;
+        }
+
+        LayoutActionRow();
+        _view.SizeChanged += (_, _) => LayoutActionRow();
     }
 
     private static Label SectionCaption(string text, int left, int top)
@@ -376,6 +393,16 @@ public sealed class SettingsScreen : IScreen
 /// </summary>
 public static class SettingsScreenText
 {
+    /// <summary>The gap between the action row and the bottom edge of the view.</summary>
+    public const int ActionRowBottomMargin = 40;
+
+    /// <summary>Where the action row's top edge goes, given the view's height and how tall a button
+    /// actually is. Pure so the arithmetic is testable — nothing in this suite constructs a Form, and
+    /// a review found the previous version guessing a row height of 30 against buttons Theme builds
+    /// 34 tall, which no test could notice.</summary>
+    public static int ActionRowTop(int viewHeight, int buttonHeight) =>
+        viewHeight - ActionRowBottomMargin - buttonHeight;
+
     /// <summary>The status line's idle-state text: what SavedVariables file the Companion is
     /// watching, or that none is configured yet. Transient states (syncing, an error, a completed
     /// sync's result) are set directly by SettingsScreen and do not go through this.</summary>

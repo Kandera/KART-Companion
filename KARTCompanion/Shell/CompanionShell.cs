@@ -22,6 +22,10 @@ public sealed class CompanionShell : Form
     private readonly Label _subtitleLabel;
     private readonly Panel _headerDivider;
     private readonly Panel _railStatusDot;
+    // Zero-sized and never shown: a Form only answers Escape through a CancelButton, and this window
+    // has no native title bar and so no other keyboard way out. Screens that want Escape for
+    // something of their own (Settings' Cancel) supply their own and this is not used.
+    private readonly Button _escapeCloseButton = new() { Size = Size.Empty, TabStop = false };
     private readonly List<(IScreen Screen, Control Icon, Panel AccentBar)> _navItems = new();
 
     public IScreen Current { get; private set; }
@@ -123,6 +127,9 @@ public sealed class CompanionShell : Form
             Controls.Add(screen.View);
         }
 
+        _escapeCloseButton.Click += (_, _) => Close();
+        Controls.Add(_escapeCloseButton);
+
         Controls.AddRange(new Control[] { _rail, _railDivider, titleLabel, _subtitleLabel, _headerDivider, _closeGlyph });
         foreach (var chrome in new Control[] { _rail, _railDivider, titleLabel, _subtitleLabel, _headerDivider, _closeGlyph })
             chrome.BringToFront();
@@ -150,8 +157,16 @@ public sealed class CompanionShell : Form
         Current = screen;
         Text = $"KART Companion — {screen.Title}";
         _subtitleLabel.Text = screen.Title;
+        // A Form has one AcceptButton and one CancelButton, so they follow whichever screen is
+        // showing rather than being claimed once by whichever screen happened to be constructed
+        // first — see IScreen. Escape falls back to closing the window, which is what the close
+        // glyph does and what a borderless card is expected to do; Enter has no such default,
+        // because there is no action every screen agrees is the safe one.
+        AcceptButton = screen.AcceptButton;
+        CancelButton = screen.CancelButton ?? _escapeCloseButton;
         SyncFrameToCurrentScreen();
         UpdateRailStatusDot();
+        screen.OnShown();
     }
 
     // The shell sizes itself to whatever the current screen needs, rather than assuming a fixed

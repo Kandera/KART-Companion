@@ -34,6 +34,12 @@ public sealed class SettingsScreen : IScreen
     public Color? StatusColor { get; private set; }
     public event EventHandler? StatusChanged;
 
+    /// <summary>Enter is OK, Escape is Cancel — but only while this screen is the one showing. The
+    /// shell applies them on every switch (see IScreen); this screen used to set them on the host
+    /// form itself, which left them bound to buttons no other screen displays.</summary>
+    public IButtonControl? AcceptButton { get; }
+    public IButtonControl? CancelButton { get; }
+
     public CompanionConfig Result { get; private set; }
 
     /// <summary>Raised once, when OK is pressed, carrying the config to persist. Cancel raises
@@ -146,14 +152,8 @@ public sealed class SettingsScreen : IScreen
         okButton.Width = 75;
         okButton.Click += (_, _) => { OnOk(); _view.FindForm()?.Close(); };
 
-        _view.ParentChanged += (_, _) =>
-        {
-            if (_view.FindForm() is { } form)
-            {
-                form.AcceptButton = okButton;
-                form.CancelButton = cancelButton;
-            }
-        };
+        AcceptButton = okButton;
+        CancelButton = cancelButton;
 
         _view.Controls.AddRange(new Control[]
         {

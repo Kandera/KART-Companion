@@ -157,24 +157,35 @@ public static class Theme
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hovered = true; Invalidate(); }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hovered = false; Invalidate(); }
 
+        // This button is drawn entirely by hand, so Enabled changes nothing about it unless it is
+        // read here: a disabled one otherwise looked, and pointed, exactly like a live one.
+        protected override void OnEnabledChanged(EventArgs e)
+        {
+            base.OnEnabledChanged(e);
+            Cursor = Enabled ? Cursors.Hand : Cursors.Default;
+            Invalidate();
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             if (Width <= 1 || Height <= 1) return;
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             e.Graphics.Clear(SurfaceColor);
 
-            var fill = Primary
-                ? (_hovered ? Color.FromArgb(90, 235, 255) : Accent)
-                : (_hovered ? Color.FromArgb(30, 45, 58) : Panel);
+            var fill = !Enabled
+                ? Panel
+                : Primary
+                    ? (_hovered ? Color.FromArgb(90, 235, 255) : Accent)
+                    : (_hovered ? Color.FromArgb(30, 45, 58) : Panel);
             using (var path = BuildRoundedPath(Width, Height))
             using (var brush = new SolidBrush(fill))
                 e.Graphics.FillPath(brush, path);
 
-            using (var pen = new Pen(Accent, 1))
+            using (var pen = new Pen(Enabled ? Accent : BorderStrong, 1))
             using (var strokePath = BuildRoundedPath(Width - 1, Height - 1))
                 e.Graphics.DrawPath(pen, strokePath);
 
-            var foreColor = Primary ? Background : Theme.Text;
+            var foreColor = !Enabled ? TextDim : Primary ? Background : Theme.Text;
             TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, foreColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
         }

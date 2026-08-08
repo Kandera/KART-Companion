@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 using KARTCompanion.Archive;
 using KARTCompanion.Export;
 using KARTCompanion.SavedVariables;
@@ -21,7 +20,14 @@ namespace KARTCompanion.Shell;
 /// cannot reach into the addon's SavedVariables to set the addon's "exported" field (that needs part
 /// 3's write-back). So a selection containing an award only the Companion has marked will, if exported
 /// again from the addon, go to WoWUtils a second time — it does not dedup. That is stated on screen
-/// rather than hidden or blocked (see UpdateFooterLabels).
+/// rather than hidden or blocked (see UpdateFooter).
+///
+/// This screen deliberately holds no ArchiveDocument. What it keeps is a display snapshot — the list
+/// of awards it last drew — and the archive itself is re-read for every decision that has consequences
+/// (see OnCopy/OnSaveCopy and HistoryExportPlanner.ExportAndStamp). The shell is modeless: the tray's
+/// "Read loot history now" and the background sync merge into their own documents and save while this
+/// window sits open, so a document held here would be stale from the moment it was handed over, and
+/// deciding from it is what once put a since-withdrawn award on the clipboard.
 /// </summary>
 public sealed class HistoryScreen : IScreen
 {
@@ -29,12 +35,8 @@ public sealed class HistoryScreen : IScreen
     private const int ContentLeft = RailWidth + 16;
     private const int ContentWidth = 820;
 
-    // The display name inside a hyperlink's brackets: |c...|Hitem:...|h[Name]|h|r. Duplicated from
-    // RcLootCouncilJsonWriter's own (private) pattern rather than exposing it there — this is a
-    // display concern for the list, not part of what gets exported.
-    private static readonly Regex ItemNamePattern = new(@"\[(.*?)\]", RegexOptions.Compiled);
-
-    private readonly ArchiveDocument _doc;
+    private readonly Func<ArchiveDocument> _loadArchive;
+    private readonly Action<ArchiveDocument> _saveArchive;
     private readonly Panel _view;
     private readonly ListView _listView;
     private readonly ComboBox _playerCombo;
@@ -43,15 +45,32 @@ public sealed class HistoryScreen : IScreen
     private readonly ComboBox _statusCombo;
     private readonly TextBox _searchBox;
     private readonly Label _emptyLabel;
+    private readonly Label _dateWarningLabel;
     private readonly Label _countLabel;
     private readonly Label _noticeLabel;
     private readonly Label _resultLabel;
+    private readonly Button _copyButton;
+    private readonly Button _saveButton;
 
+    private IReadOnlyList<ArchivedAward> _awards;
     private IReadOnlyList<ArchivedAward> _filtered = Array.Empty<ArchivedAward>();
+    private bool _suspendFilter;
 
     public string Title => "Loot History";
     public Theme.IconGlyph Glyph => Theme.IconGlyph.List;
     public Control View => _view;
+
+    // Enter and Escape belong to whichever screen is showing. They used to be wired to the Settings
+    // screen's OK and Cancel for the lifetime of the window, so Enter here saved settings and closed
+    // the window from a screen that has no OK button on it (see CompanionShell.SwitchTo). Nothing on
+    // this screen is safe to trigger by pressing Enter — Copy stamps an export — so it offers none.
+    public IButtonControl? AcceptButton => null;
+    public IButtonControl? CancelButton => null;
+
+    /// Navigating to this screen re-reads the archive. What is on screen is a snapshot of a file the
+    /// tray's "Read loot history now" and the background sync write while this window is open, and a
+    /// snapshot taken when the window opened stayed on screen for the entire session.
+    public void OnShown() => ReloadFromArchive();
 
     // This screen has no "health" concept the way Settings' sync status does — the rail dot simply
     // stays hidden for it (see IScreen's remarks: null means no dot). Custom add/remove (rather than a
@@ -60,9 +79,19 @@ public sealed class HistoryScreen : IScreen
     public Color? StatusColor => null;
     public event EventHandler? StatusChanged { add { } remove { } }
 
-    public HistoryScreen(ArchiveDocument doc)
+    /// <param name="awards">What to draw before the archive is first re-read — the caller has just
+    /// loaded it, so re-reading it here would be a second parse of the same file for nothing.</param>
+    /// <param name="loadArchive">Re-reads the archive from disk. Must be the real load, not a
+    /// fallback that answers an empty document on failure: this is also what an export saves back
+    /// over, and saving an empty document over the one file the game has already forgotten is the
+    /// worst outcome this program has.</param>
+    /// <param name="saveArchive">Persists the archive after an export has been stamped.</param>
+    public HistoryScreen(
+        IReadOnlyList<ArchivedAward> awards, Func<ArchiveDocument> loadArchive, Action<ArchiveDocument> saveArchive)
     {
-        _doc = doc;
+        _awards = awards;
+        _loadArchive = loadArchive;
+        _saveArchive = saveArchive;
         _view = new Panel();
 
         // --- filter row ---
@@ -81,13 +110,27 @@ public sealed class HistoryScreen : IScreen
         var searchLabel = FilterLabel("Search", 660);
         _searchBox = FilterTextBox(660, 210);
 
+        // Sits between the filter row and the list, where the field it is talking about is. An
+        // unparsable date is treated as no filter at all — without this the only sign of a typo was
+        // that the list did not narrow, which looks exactly like a date that matched everything.
+        _dateWarningLabel = new Label
+        {
+            Left = ContentLeft,
+            Top = 136,
+            Width = ContentWidth,
+            AutoSize = false,
+            Height = 14,
+            Font = new Font(_view.Font.FontFamily, 8f),
+            ForeColor = Theme.Error,
+        };
+
         // --- the list itself ---
         _listView = new SmoothListView
         {
             Left = ContentLeft,
-            Top = 148,
+            Top = 154,
             Width = ContentWidth,
-            Height = 420,
+            Height = 414,
             View = System.Windows.Forms.View.Details,
             VirtualMode = true,
             OwnerDraw = true,
@@ -110,7 +153,7 @@ public sealed class HistoryScreen : IScreen
         _listView.DrawColumnHeader += DrawHeader;
         _listView.DrawItem += (_, e) => e.DrawDefault = false;
         _listView.DrawSubItem += DrawRow;
-        _listView.SelectedIndexChanged += (_, _) => UpdateFooterLabels();
+        _listView.SelectedIndexChanged += (_, _) => UpdateFooter();
 
         _emptyLabel = new Label
         {
@@ -124,17 +167,17 @@ public sealed class HistoryScreen : IScreen
         Theme.StyleLabel(_emptyLabel, dim: true);
 
         // --- footer: actions + the lines the brief asks for ---
-        var copyButton = Theme.CreateButton("Copy for WoWUtils", primary: true);
-        copyButton.Left = ContentLeft;
-        copyButton.Top = 580;
-        copyButton.Width = 170;
-        copyButton.Click += (_, _) => OnCopy();
+        _copyButton = Theme.CreateButton("Copy for WoWUtils", primary: true);
+        _copyButton.Left = ContentLeft;
+        _copyButton.Top = 580;
+        _copyButton.Width = 170;
+        _copyButton.Click += (_, _) => OnCopy();
 
-        var saveButton = Theme.CreateButton("Save a copy…");
-        saveButton.Left = copyButton.Right + 10;
-        saveButton.Top = 580;
-        saveButton.Width = 140;
-        saveButton.Click += (_, _) => OnSaveCopy();
+        _saveButton = Theme.CreateButton("Save a copy…");
+        _saveButton.Left = _copyButton.Right + 10;
+        _saveButton.Top = 580;
+        _saveButton.Width = 140;
+        _saveButton.Click += (_, _) => OnSaveCopy();
 
         _countLabel = FooterLabel(622);
         _noticeLabel = FooterLabel(644);
@@ -144,8 +187,8 @@ public sealed class HistoryScreen : IScreen
         {
             playerLabel, _playerCombo, fromLabel, _fromBox, toLabel, _toBox,
             statusLabel, _statusCombo, searchLabel, _searchBox,
-            _listView, _emptyLabel,
-            copyButton, saveButton, _countLabel, _noticeLabel, _resultLabel,
+            _dateWarningLabel, _listView, _emptyLabel,
+            _copyButton, _saveButton, _countLabel, _noticeLabel, _resultLabel,
         });
 
         // Controls.AddRange leaves _listView in front of _emptyLabel (added right after it, but
@@ -207,24 +250,58 @@ public sealed class HistoryScreen : IScreen
         return label;
     }
 
-    // A small ListView subclass purely to flip on double buffering (a protected Control property
-    // ListView does not expose itself) — without it, an owner-drawn list of a few thousand rows
-    // flickers noticeably while scrolling.
+    // A small ListView subclass for the two things the control does not give us: double buffering (a
+    // protected Control property ListView does not expose itself) — without it, an owner-drawn list
+    // of a few thousand rows flickers noticeably while scrolling — and Ctrl+A.
     private sealed class SmoothListView : ListView
     {
+        // Windows' list-view control has no select-all of its own: Ctrl+A in Explorer is Explorer's
+        // doing, not the control's. Measured on a throwaway harness with a real window: Ctrl+A
+        // selected 0 of 5 rows in a plain ListView, a virtual one and an owner-drawn virtual one
+        // alike, with the same harness proving the keystroke reached the app. Nothing selected means
+        // nothing exported now, so without this there is no way at all to export a whole archive.
+        private const int LVM_SETITEMSTATE = 0x1000 + 43;
+        private const uint LVIF_STATE = 0x0008;
+        private const uint LVIS_SELECTED = 0x0002;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LVITEM
+        {
+            public uint mask; public int iItem; public int iSubItem; public uint state; public uint stateMask;
+            public IntPtr pszText; public int cchTextMax; public int iImage; public IntPtr lParam;
+            public int iIndent; public int iGroupId; public uint cColumns; public IntPtr puColumns;
+            public IntPtr piColFmt; public int iGroup;
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref LVITEM lParam);
+
         public SmoothListView() => DoubleBuffered = true;
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (!e.Control || e.KeyCode != Keys.A) return;
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            SelectAllRows();
+        }
+
+        // One message with an item index of -1, not a loop over SelectedIndices: measured on 20,000
+        // virtual rows, the loop took 4.1 seconds and raised SelectedIndexChanged 20,000 times (so
+        // every footer recount ran 20,000 times over a growing selection); this takes under a
+        // millisecond and raises it once.
+        private void SelectAllRows()
+        {
+            if (VirtualListSize == 0) return;
+            var item = new LVITEM { mask = LVIF_STATE, state = LVIS_SELECTED, stateMask = LVIS_SELECTED };
+            SendMessage(Handle, LVM_SETITEMSTATE, (IntPtr)(-1), ref item);
+        }
     }
 
     private void PopulateFilterOptions()
     {
-        _playerCombo.Items.Add("All players");
-        var players = _doc.Awards
-            .Select(a => new LootHistoryEntry(a.Fields).Winner)
-            .Where(w => !string.IsNullOrEmpty(w))
-            .Distinct()
-            .OrderBy(w => w, StringComparer.OrdinalIgnoreCase);
-        foreach (var p in players) _playerCombo.Items.Add(p!);
-        _playerCombo.SelectedIndex = 0;
+        RefreshPlayerOptions();
         _playerCombo.SelectedIndexChanged += (_, _) => RunFilter();
 
         _statusCombo.Items.Add("All statuses");
@@ -237,12 +314,67 @@ public sealed class HistoryScreen : IScreen
         _toBox.TextChanged += (_, _) => RunFilter();
     }
 
+    /// Rebuilt from the current snapshot every time one is adopted, not once in the constructor: a
+    /// player whose first award arrives while the window is open (the post-export reload, or
+    /// navigating back to this screen) was otherwise absent from the dropdown, and so unfilterable,
+    /// until the whole window was closed and reopened. The current choice survives if that player is
+    /// still present.
+    private void RefreshPlayerOptions()
+    {
+        var previous = _playerCombo.SelectedIndex > 0 ? _playerCombo.SelectedItem as string : null;
+
+        // Clearing the items drives SelectedIndex to -1 and then back, and each step raises
+        // SelectedIndexChanged — without this the filter would run twice over the whole archive on
+        // a combo that is mid-rebuild.
+        _suspendFilter = true;
+        _playerCombo.Items.Clear();
+        _playerCombo.Items.Add("All players");
+        var players = _awards
+            .Select(a => new LootHistoryEntry(a.Fields).Winner)
+            .Where(w => !string.IsNullOrEmpty(w))
+            .Distinct()
+            .OrderBy(w => w, StringComparer.OrdinalIgnoreCase);
+        foreach (var p in players) _playerCombo.Items.Add(p!);
+
+        var restored = previous is null ? -1 : _playerCombo.Items.IndexOf(previous);
+        _playerCombo.SelectedIndex = restored >= 0 ? restored : 0;
+        _suspendFilter = false;
+    }
+
+    /// Re-reads the archive and redraws from it. Called when this screen becomes the current one
+    /// (see IScreen.OnShown) and after an export, because everything this window shows is a snapshot
+    /// of a file two other code paths write while it is open. The selection cannot survive it: a
+    /// virtual ListView's selection is row indices, and the rows are about to be different ones.
+    private void ReloadFromArchive()
+    {
+        try
+        {
+            AdoptSnapshot(_loadArchive().Awards);
+        }
+        catch (Exception ex)
+        {
+            // The list on screen is kept — a stale list is more use than an empty one, and the
+            // export path re-reads the archive itself and will fail the same way, loudly, rather
+            // than acting on this snapshot.
+            SetResult($"The archive could not be re-read, so this list may be out of date: {ex.Message}", ResultKind.Error);
+        }
+    }
+
+    private void AdoptSnapshot(IReadOnlyList<ArchivedAward> awards)
+    {
+        _awards = awards;
+        RefreshPlayerOptions();
+        RunFilter();
+    }
+
     // Re-runs ArchiveQuery.Filter and resets VirtualListSize — called on every filter control change
     // and after a successful export (to move the status column). Selection is cleared rather than
     // carried over: the row indices a virtual ListView tracks would otherwise point at whatever award
     // happens to land on that index in the new, differently-filtered result.
     private void RunFilter()
     {
+        if (_suspendFilter) return;
+
         _listView.SelectedIndices.Clear();
 
         var player = _playerCombo.SelectedIndex > 0 ? _playerCombo.SelectedItem as string : null;
@@ -251,11 +383,17 @@ public sealed class HistoryScreen : IScreen
         var to = HistoryExportPlanner.ParseToDate(_toBox.Text);
         var search = string.IsNullOrWhiteSpace(_searchBox.Text) ? null : _searchBox.Text.Trim();
 
-        _filtered = ArchiveQuery.Filter(_doc.Awards, player, from, to, status, search);
+        // A date that does not parse filters nothing, so say so twice over: name the field, and
+        // color the field itself, rather than leaving a typo looking like a filter that matched.
+        _dateWarningLabel.Text = HistoryExportPlanner.DateFilterWarning(_fromBox.Text, _toBox.Text);
+        _fromBox.ForeColor = HistoryExportPlanner.IsUnparsableDate(_fromBox.Text) ? Theme.Error : Theme.Text;
+        _toBox.ForeColor = HistoryExportPlanner.IsUnparsableDate(_toBox.Text) ? Theme.Error : Theme.Text;
+
+        _filtered = ArchiveQuery.Filter(_awards, player, from, to, status, search);
         _listView.VirtualListSize = _filtered.Count;
         _emptyLabel.Visible = _filtered.Count == 0;
         _listView.Invalidate();
-        UpdateFooterLabels();
+        UpdateFooter();
     }
 
     private ListViewItem BuildRow(ArchivedAward award)
@@ -266,7 +404,7 @@ public sealed class HistoryScreen : IScreen
         {
             FormatTime(entry.Time),
             entry.Winner ?? "",
-            ItemDisplayName(entry.Item),
+            ArchiveQuery.ItemDisplayName(entry.Item),
             entry.Reason ?? "",
             DifficultyDisplay(entry),
             StatusDisplay(status),
@@ -280,13 +418,6 @@ public sealed class HistoryScreen : IScreen
 
     private static string DifficultyDisplay(LootHistoryEntry e) =>
         e.Difficulty ?? e.DifficultyId?.ToString(CultureInfo.InvariantCulture) ?? "";
-
-    private static string ItemDisplayName(string? link)
-    {
-        if (string.IsNullOrEmpty(link)) return "";
-        var m = ItemNamePattern.Match(link);
-        return m.Success ? m.Groups[1].Value : link;
-    }
 
     private static string StatusDisplay(AwardStatus status) => status switch
     {
@@ -340,14 +471,10 @@ public sealed class HistoryScreen : IScreen
             .Select(i => _filtered[i])
             .ToList();
 
-    // The set Copy/Save would actually act on right now: the selection, or everything shown when
-    // nothing is selected, always minus withdrawn awards. Shared by both buttons and by the footer
-    // labels so what the labels describe and what a press does can never drift apart.
-    private IReadOnlyList<ArchivedAward> PrepareExport()
-    {
-        var effective = HistoryExportPlanner.EffectiveSelection(_filtered, SelectedAwards());
-        return HistoryExportPlanner.AwardsToExport(effective);
-    }
+    // The keys of what is selected. Keys rather than the award objects themselves, because both
+    // export paths re-read the archive and act on ITS awards — the objects in this list belong to a
+    // snapshot that may already be out of date (see this class's own remarks).
+    private List<string> SelectedKeys() => SelectedAwards().Select(a => a.Key).ToList();
 
     private enum ResultKind { Neutral, Success, Error }
 
@@ -362,67 +489,94 @@ public sealed class HistoryScreen : IScreen
         };
     }
 
-    // Copy for WoWUtils: clipboard first (that is the actual export the user asked for), then the
-    // Companion's own record of it. The record is built by HistoryExportPlanner.StampAndSave, which
-    // reloads the archive from disk before stamping rather than writing back the snapshot this window
-    // opened with — the shell is modeless and the tray's "Read loot history now" / background sync
-    // hold their own separate ArchiveDocument and can Save a newer file while this window sits open.
-    // Writing this window's stale copy back over that would silently erase whatever merged in since
-    // (new awards, new Withdrawn marks) — the one file that exists precisely because the game has
-    // already forgotten that data. _doc is only updated — and only its Awards, not replaced wholesale
-    // — once the reload-stamp-save has actually succeeded; on failure _doc is untouched, so there is
-    // nothing to roll back.
+    // Copy for WoWUtils. Everything that matters happens inside
+    // HistoryExportPlanner.ExportAndStamp: the archive is re-read, what goes is decided in THAT
+    // document, the clipboard gets it, and only then is the mark stamped and the file saved.
+    //
+    // Deciding there rather than here is the fix for the one guarantee this window had been breaking.
+    // The shell is modeless: while it sits open, the tray's "Read loot history now" and the
+    // background sync merge and save their own documents, and a merge can mark an award Withdrawn
+    // because the addon deleted its own row. This window's list still showed it as open, and a Copy
+    // sent it — "a withdrawn award is never exported, whatever is selected" failed for exactly as
+    // long as the list was stale, which was the whole session.
+    //
+    // The snapshot this screen draws from is adopted only once the whole sequence has succeeded; on
+    // failure it is untouched, so there is nothing to roll back.
     private void OnCopy()
     {
-        var toExport = PrepareExport();
-        if (toExport.Count == 0)
-        {
-            // Clipboard.SetText throws on an empty string — rather than let that surface as an
-            // unhandled exception, an empty export is just not sent to the clipboard at all.
-            SetResult("Nothing to export.", ResultKind.Neutral);
-            return;
-        }
-
-        var json = RcLootCouncilJsonWriter.Write(toExport.Select(a => new LootHistoryEntry(a.Fields)));
+        // Which step failed decides what the user is being told and what they have to do about it,
+        // and only the call site can tell them apart — the three exceptions are otherwise identical.
+        var loaded = false;
+        var delivered = false;
+        HistoryExportPlanner.ExportOutcome outcome;
         try
         {
-            Clipboard.SetText(json);
-        }
-        catch (ExternalException ex)
-        {
-            // A clipboard manager, an RDP session, or another app can transiently hold the clipboard
-            // open (CLIPBRD_E_CANT_OPEN); WinForms already retries internally, but if it still fails
-            // this reports it the same way OnSaveCopy reports a failed file write, instead of letting
-            // it escape as a generic crash balloon.
-            SetResult($"Could not copy to the clipboard: {ex.Message}", ResultKind.Error);
-            return;
-        }
-
-        var keys = toExport.Select(a => a.Key).ToList();
-        ArchiveDocument updated;
-        try
-        {
-            updated = HistoryExportPlanner.StampAndSave(keys, DateTimeOffset.UtcNow, ArchiveStore.Load, ArchiveStore.Save);
+            outcome = HistoryExportPlanner.ExportAndStamp(
+                SelectedKeys(), DateTimeOffset.UtcNow,
+                () => { var fresh = _loadArchive(); loaded = true; return fresh; },
+                awards =>
+                {
+                    // Clipboard.SetText throws on an empty string, but ExportAndStamp does not call
+                    // this at all when there is nothing to send.
+                    Clipboard.SetText(RcLootCouncilJsonWriter.Write(awards.Select(a => new LootHistoryEntry(a.Fields))));
+                    delivered = true;
+                },
+                _saveArchive);
         }
         catch (Exception ex)
         {
-            SetResult($"Copied {toExport.Count} award(s), but the export could not be recorded: {ex.Message}. Exporting again from the addon may send them a second time.", ResultKind.Error);
+            // A clipboard manager, an RDP session or another app can transiently hold the clipboard
+            // open (CLIPBRD_E_CANT_OPEN) and WinForms already retries internally; a failure after
+            // the text is on the clipboard instead means the awards went out unrecorded, which is
+            // the one of the three the user has to act on.
+            var message = !loaded
+                ? $"The archive could not be read, so nothing was copied: {ex.Message}"
+                : !delivered
+                    ? $"Could not copy to the clipboard: {ex.Message}"
+                    : $"Copied to the clipboard, but the export could not be recorded: {ex.Message}. Exporting again from the addon may send them a second time.";
+            SetResult(message, ResultKind.Error);
             return;
         }
 
-        _doc.Awards = updated.Awards;
-        SetResult($"Copied {toExport.Count} award(s) to the clipboard and marked them exported.", ResultKind.Success);
-        RunFilter();
+        var selectedCount = _listView.SelectedIndices.Count;
+        AdoptSnapshot(outcome.Document.Awards);
+
+        if (outcome.Exported.Count == 0)
+        {
+            SetResult("Nothing was exported — every selected award has since been withdrawn.", ResultKind.Neutral);
+            return;
+        }
+
+        // An award withdrawn between the list being drawn and the button being pressed is left out
+        // silently otherwise, and "Copied 11" against 12 selected rows is the kind of quiet
+        // discrepancy that gets explained away.
+        var leftOut = selectedCount - outcome.Exported.Count;
+        var note = leftOut > 0 ? $" {leftOut} withdrawn award(s) were left out." : "";
+        SetResult($"Copied {outcome.Exported.Count} award(s) to the clipboard and marked them exported.{note}", ResultKind.Success);
     }
 
     // A copy for keeping, not the export of record — writes the same text to a file but never
-    // touches ExportedByCompanionAt.
+    // touches ExportedByCompanionAt. It re-reads the archive all the same, because the withdrawn
+    // rule is not about stamping: an award the addon has taken back must not be in a file the
+    // maintainer later pastes somewhere either.
     private void OnSaveCopy()
     {
-        var toExport = PrepareExport();
+        ArchiveDocument fresh;
+        IReadOnlyList<ArchivedAward> toExport;
+        try
+        {
+            fresh = _loadArchive();
+            toExport = HistoryExportPlanner.ExportableFrom(fresh, SelectedKeys());
+        }
+        catch (Exception ex)
+        {
+            SetResult($"The archive could not be read: {ex.Message}", ResultKind.Error);
+            return;
+        }
+
         if (toExport.Count == 0)
         {
-            SetResult("Nothing to export.", ResultKind.Neutral);
+            SetResult("Nothing was saved — every selected award has since been withdrawn.", ResultKind.Neutral);
             return;
         }
 
@@ -437,7 +591,9 @@ public sealed class HistoryScreen : IScreen
         try
         {
             File.WriteAllText(dialog.FileName, json);
-            SetResult($"Saved {toExport.Count} award(s) to {dialog.FileName}.", ResultKind.Success);
+            var leftOut = _listView.SelectedIndices.Count - toExport.Count;
+            var note = leftOut > 0 ? $" {leftOut} withdrawn award(s) were left out." : "";
+            SetResult($"Saved {toExport.Count} award(s) to {dialog.FileName}.{note}", ResultKind.Success);
         }
         catch (Exception ex)
         {
@@ -445,22 +601,33 @@ public sealed class HistoryScreen : IScreen
         }
     }
 
-    // The count line the brief asks for, plus the one thing no code can fix: exporting again from the
-    // addon will re-send anything only the Companion has marked, because WoWUtils does not dedup and
-    // the Companion cannot set the addon's own mark (that needs part 3's write-back).
-    private void UpdateFooterLabels()
+    // The count line the brief asks for, the state of the two buttons, and the one thing no code can
+    // fix: exporting again from the addon will re-send anything only the Companion has marked,
+    // because WoWUtils does not dedup and the Companion cannot set the addon's own mark (that needs
+    // part 3's write-back).
+    //
+    // All three are asked about the real selection. The notice in particular: it used to be asked
+    // about "the selection, or everything shown if nothing is selected", and since Companion-exported
+    // awards never leave the archive, that meant it was lit by default from the second time the
+    // window was ever opened. It is the only mitigation the design has for the two-exporters problem,
+    // and a warning that is always on is furniture.
+    private void UpdateFooter()
     {
         var selected = SelectedAwards();
-        var effective = HistoryExportPlanner.EffectiveSelection(_filtered, selected);
-        var exportable = HistoryExportPlanner.AwardsToExport(effective);
+        var exportable = HistoryExportPlanner.AwardsToExport(selected);
 
-        _countLabel.Text = selected.Count > 0
-            ? $"{selected.Count} award(s) selected ({exportable.Count} exportable)."
-            : $"No selection — Copy exports all {exportable.Count} shown award(s).";
+        _countLabel.Text = HistoryExportPlanner.SelectionSummary(_filtered.Count, selected);
 
-        _noticeLabel.Text = HistoryExportPlanner.ContainsCompanionOnlyExport(effective)
+        _noticeLabel.Text = HistoryExportPlanner.ContainsCompanionOnlyExport(exportable)
             ? "Some of these were already exported by the Companion but not the addon — exporting again from the addon will send them a second time; WoWUtils does not dedup."
             : "";
+
+        // Nothing selected means nothing exported, so neither button offers to do anything. There is
+        // no unmark and no undo for a stamped export, which makes "export everything by pressing the
+        // primary button with nothing selected" a destructive default — and one that fires again if
+        // the user presses the button a second time to check the first press worked.
+        _copyButton.Enabled = exportable.Count > 0;
+        _saveButton.Enabled = exportable.Count > 0;
     }
 }
 
@@ -476,23 +643,66 @@ public static class HistoryExportPlanner
     /// StatusForComboIndex (to read it back), so the two can never drift apart into an off-by-one.</summary>
     public static readonly AwardStatus[] StatusOptions = Enum.GetValues<AwardStatus>();
 
-    /// <summary>What a press of either export button would act on right now: the current selection,
-    /// or everything the filter shows when nothing is selected.</summary>
-    public static IReadOnlyList<ArchivedAward> EffectiveSelection(
-        IReadOnlyList<ArchivedAward> filtered, IReadOnlyList<ArchivedAward> selected) =>
-        selected.Count > 0 ? selected : filtered;
+    /// <summary>The awards Copy/Save actually send: what is selected, minus every withdrawn award. A
+    /// withdrawn award is never exported no matter what was selected — the addon already deleted its
+    /// own copy of it.
+    ///
+    /// There is deliberately no "nothing selected means everything shown" fallback here. It existed,
+    /// and on a 20,000-award archive one press of the primary button stamped 19,793 awards exported
+    /// with no unmark and no undo, which is a destructive default reachable by pressing the same
+    /// button twice. Nothing selected now means nothing exported (HistoryScreen disables both buttons
+    /// and says so); Ctrl+A is how everything shown is taken. This is also what the design asked for:
+    /// "What gets exported is what is selected."</summary>
+    public static IReadOnlyList<ArchivedAward> AwardsToExport(IReadOnlyList<ArchivedAward> selected) =>
+        selected.Where(a => !a.Withdrawn).ToList();
 
-    /// <summary>The awards Copy/Save actually send: the effective selection minus every withdrawn
-    /// award. A withdrawn award is never exported no matter what was selected — the addon already
-    /// deleted its own copy of it.</summary>
-    public static IReadOnlyList<ArchivedAward> AwardsToExport(IReadOnlyList<ArchivedAward> effectiveSelection) =>
-        effectiveSelection.Where(a => !a.Withdrawn).ToList();
+    /// <summary>True when the selection holds an award the Companion has marked exported but the
+    /// addon has not — the one case exporting again from the addon would resend, since WoWUtils does
+    /// not dedup and the Companion cannot set the addon's own mark.
+    ///
+    /// Asked about the user's actual selection, never about "everything shown": Companion-exported
+    /// awards stay in the archive forever, so a fallback selection meant this was lit from the second
+    /// time the window was ever opened, permanently. A warning that is always on is furniture, and
+    /// this is the only mitigation the design has for the two-exporters problem.</summary>
+    public static bool ContainsCompanionOnlyExport(IReadOnlyList<ArchivedAward> selected) =>
+        selected.Any(a => ArchiveQuery.StatusOf(a) == AwardStatus.ExportedByCompanion);
 
-    /// <summary>True when the effective selection holds an award the Companion has marked exported
-    /// but the addon has not — the one case exporting again from the addon would resend, since
-    /// WoWUtils does not dedup and the Companion cannot set the addon's own mark.</summary>
-    public static bool ContainsCompanionOnlyExport(IReadOnlyList<ArchivedAward> effectiveSelection) =>
-        effectiveSelection.Any(a => ArchiveQuery.StatusOf(a) == AwardStatus.ExportedByCompanion);
+    /// <summary>The footer's count line. Counts rows shown as rows shown — a withdrawn award among
+    /// them is still a row on screen, and reporting four rows as "3 shown" (the exportable count
+    /// wearing the shown count's label) described neither number correctly.</summary>
+    public static string SelectionSummary(int shownCount, IReadOnlyList<ArchivedAward> selected)
+    {
+        if (selected.Count == 0)
+        {
+            return shownCount == 0
+                ? "No awards shown — nothing to select."
+                : $"Nothing selected — select the awards to export. {shownCount} shown; Ctrl+A selects all of them.";
+        }
+
+        var exportable = AwardsToExport(selected).Count;
+        var withdrawn = selected.Count - exportable;
+        return withdrawn == 0
+            ? $"{selected.Count} of {shownCount} shown award(s) selected."
+            : $"{selected.Count} of {shownCount} shown award(s) selected — {exportable} will be exported, {withdrawn} withdrawn.";
+    }
+
+    /// <summary>The warning for a date field that does not parse. Unparsable text is treated as no
+    /// filter at all, which on its own is silent: a mistyped date narrows nothing and looks exactly
+    /// like a date that simply matched everything.</summary>
+    public static string DateFilterWarning(string fromText, string toText)
+    {
+        var badFrom = IsUnparsableDate(fromText);
+        var badTo = IsUnparsableDate(toText);
+        if (badFrom && badTo) return "From and To are not dates — both filters are being ignored. Use a date like 2026-08-08.";
+        if (badFrom) return "From is not a date — that filter is being ignored. Use a date like 2026-08-08.";
+        if (badTo) return "To is not a date — that filter is being ignored. Use a date like 2026-08-08.";
+        return "";
+    }
+
+    /// <summary>Blank means "no filter", which is not a mistake; anything else that fails to parse
+    /// is.</summary>
+    public static bool IsUnparsableDate(string text) =>
+        !string.IsNullOrWhiteSpace(text) && ParseDate(text, timeZone: null) == null;
 
     /// <summary>Maps the status dropdown's SelectedIndex back to the AwardStatus it represents, or
     /// null for index 0 ("All statuses"). Index 0 is the sentinel, so the lookup into StatusOptions is
@@ -501,50 +711,76 @@ public static class HistoryExportPlanner
     public static AwardStatus? StatusForComboIndex(int selectedIndex) =>
         selectedIndex > 0 ? StatusOptions[selectedIndex - 1] : null;
 
-    /// <summary>Parses a "From" field as the start of the typed day, local time, or null if the text
-    /// doesn't parse. Free-text rather than a native DateTimePicker — see HistoryScreen's own remarks
-    /// on why.</summary>
-    public static DateTimeOffset? ParseFromDate(string text) => ParseDate(text);
+    /// <summary>Parses a "From" field as the start of the typed day, or null if the text doesn't
+    /// parse. Free-text rather than a native DateTimePicker — see HistoryScreen's own remarks on why.
+    ///
+    /// The day starts in a caller-supplied time zone, defaulting to the machine's local one: the user
+    /// types the date they saw in the list's Time column, and that column is rendered local (see
+    /// FormatTime). The override exists for the same reason RcLootCouncilJsonWriter has one — a test
+    /// that takes its expected offset from the value under test cannot fail, which is exactly how a
+    /// timezone defect shipped green earlier in this work.</summary>
+    public static DateTimeOffset? ParseFromDate(string text, TimeZoneInfo? timeZone = null) =>
+        ParseDate(text, timeZone);
 
-    /// <summary>Parses a "To" field as the END of the typed day (23:59:59.9999999 local), not the
-    /// instant at midnight — "to 2026-08-08" means include everything that happened ON the 8th, which
-    /// is what a human typing a date means, not "up to the very start of it".</summary>
-    public static DateTimeOffset? ParseToDate(string text) => ParseDate(text)?.AddDays(1).AddTicks(-1);
+    /// <summary>Parses a "To" field as the END of the typed day (23:59:59.9999999), not the instant
+    /// at midnight — "to 2026-08-08" means include everything that happened ON the 8th, which is what
+    /// a human typing a date means, not "up to the very start of it".</summary>
+    public static DateTimeOffset? ParseToDate(string text, TimeZoneInfo? timeZone = null) =>
+        ParseDate(text, timeZone)?.AddDays(1).AddTicks(-1);
 
-    private static DateTimeOffset? ParseDate(string text) =>
-        DateTime.TryParse(text, CultureInfo.CurrentCulture, DateTimeStyles.None, out var d)
-            ? new DateTimeOffset(DateTime.SpecifyKind(d.Date, DateTimeKind.Local))
-            : null;
+    private static DateTimeOffset? ParseDate(string text, TimeZoneInfo? timeZone)
+    {
+        if (!DateTime.TryParse(text, CultureInfo.CurrentCulture, DateTimeStyles.None, out var d)) return null;
+        var zone = timeZone ?? TimeZoneInfo.Local;
+        var midnight = d.Date;
+        return new DateTimeOffset(midnight, zone.GetUtcOffset(midnight));
+    }
+
+    /// <summary>The awards a Copy or a Save would actually send, decided in the document handed in —
+    /// the selection's keys, minus anything withdrawn in THAT document.
+    ///
+    /// Keys rather than award objects on purpose: the caller's objects belong to the snapshot its
+    /// list was drawn from, and the decision has to be made against the archive as it is now.</summary>
+    public static IReadOnlyList<ArchivedAward> ExportableFrom(
+        ArchiveDocument document, IReadOnlyCollection<string> selectedKeys)
+    {
+        var keys = new HashSet<string>(selectedKeys);
+        return document.Awards.Where(a => keys.Contains(a.Key) && !a.Withdrawn).ToList();
+    }
+
+    /// <summary>What an export did: the document it was decided in, and the awards that actually
+    /// went.</summary>
+    public sealed record ExportOutcome(ArchiveDocument Document, IReadOnlyList<ArchivedAward> Exported);
 
     /// <summary>
-    /// Stamps ExportedByCompanionAt on the awards named by <paramref name="keysToStamp"/>, in a
-    /// document fetched fresh via <paramref name="load"/> — not in whatever document the caller
-    /// already had — then saves that document via <paramref name="save"/> and returns it.
+    /// The whole Copy path in one tested place: load the archive fresh, decide what goes from THAT
+    /// document, hand it to <paramref name="deliver"/> (the clipboard), stamp only what went, save.
     ///
-    /// This is what keeps a Copy from a modeless, long-open history window from overwriting work it
-    /// never saw: the shell stays open while the tray's background sync or "Read loot history now"
-    /// runs against their own separate ArchiveDocument and can Save a newer file in the meantime.
-    /// Reloading immediately before stamping means whatever they added — new awards, new Withdrawn
-    /// marks — is what gets saved back, with only the requested keys touched on top of it.
+    /// The reload is not just about not overwriting a newer file. It is what makes "a withdrawn award
+    /// is never exported" true: the shell is modeless, and the tray's "Read loot history now" or the
+    /// background sync can mark an award Withdrawn — the addon deleted its own row — while this
+    /// window sits open showing a snapshot that still calls it open. Deciding from the caller's
+    /// snapshot and stamping in a fresh one meant the stamp was correct and the export was not.
+    /// Deciding and stamping in the same document is the only shape that cannot drift.
     ///
-    /// If <paramref name="save"/> throws, the exception propagates and the freshly-loaded, stamped
-    /// document this method built is simply discarded with it — there is nothing to roll back because
-    /// nothing durable, and nothing the caller already held, was ever touched.
+    /// Order matters and is pinned by test: nothing is stamped and nothing is saved unless delivery
+    /// returned. If <paramref name="deliver"/> or <paramref name="save"/> throws, the exception
+    /// propagates and the freshly-loaded document is discarded with it — there is nothing to roll
+    /// back, because nothing durable and nothing the caller already held was touched.
     /// </summary>
-    public static ArchiveDocument StampAndSave(
-        IReadOnlyCollection<string> keysToStamp, DateTimeOffset stampedAt,
-        Func<ArchiveDocument> load, Action<ArchiveDocument> save)
+    public static ExportOutcome ExportAndStamp(
+        IReadOnlyCollection<string> selectedKeys, DateTimeOffset stampedAt,
+        Func<ArchiveDocument> load, Action<IReadOnlyList<ArchivedAward>> deliver, Action<ArchiveDocument> save)
     {
         var fresh = load();
-        var keys = new HashSet<string>(keysToStamp);
-        // The archive never deletes a row (see ArchivedAward's own remarks) — every key passed in
-        // was read from an award that came out of this same file, so it cannot be missing here.
-        foreach (var award in fresh.Awards)
-        {
-            if (keys.Contains(award.Key)) award.ExportedByCompanionAt = stampedAt;
-        }
+        var toExport = ExportableFrom(fresh, selectedKeys);
+        if (toExport.Count == 0) return new ExportOutcome(fresh, toExport);
 
+        deliver(toExport);
+
+        foreach (var award in toExport) award.ExportedByCompanionAt = stampedAt;
         save(fresh);
-        return fresh;
+        return new ExportOutcome(fresh, toExport);
     }
+
 }

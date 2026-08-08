@@ -18,4 +18,23 @@ public interface IScreen
     Control View { get; }
     Color? StatusColor { get; }
     event EventHandler? StatusChanged;
+
+    /// <summary>
+    /// What Enter and Escape should do while this screen is showing, or null for "nothing".
+    ///
+    /// A Form has exactly one of each, so they belong to whichever screen is current — the shell
+    /// sets them on every switch (see CompanionShell.SwitchTo). The settings screen used to set
+    /// them on the host form itself, once, which left Enter bound to its OK button on every other
+    /// screen: pressing Enter on the history list saved and closed the settings screen, and Escape
+    /// did the same via Cancel, from a screen showing neither button.
+    /// </summary>
+    IButtonControl? AcceptButton => null;
+    IButtonControl? CancelButton => null;
+
+    /// <summary>
+    /// Called by the shell whenever this screen becomes the current one. A screen showing data that
+    /// another code path writes while the window is open (the archive) re-reads it here; a screen
+    /// whose data only it can change does nothing.
+    /// </summary>
+    void OnShown() { }
 }

@@ -24,7 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **History screen** showing every award the archive holds, with filters for player, timeframe and
   status, and search over item names and award reasons.
 - **Copy for WoWUtils** puts selected awards on the clipboard in RCLootCouncil format and records
-  that they were exported.
+  that they were exported. What is selected is what goes: with nothing selected both export buttons
+  are disabled, and `Ctrl+A` selects everything the filters currently show. A withdrawn award is
+  never exported, decided against the archive as it is at the moment the button is pressed.
 - **Save a copy** of an export to a file without recording the export.
 
 ### Fixed

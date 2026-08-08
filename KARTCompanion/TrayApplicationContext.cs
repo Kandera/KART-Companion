@@ -96,10 +96,13 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         // Opening it twice must focus the existing window, not make a second — the shell is
         // shown modeless (see below) so a re-entrant call here (e.g. the tray menu clicked again
-        // while it's already open) just brings the existing one forward.
+        // while it's already open) just brings the existing one forward. Show(0) rather than a bare
+        // Activate(): this is the "Settings..." menu item, and a window left on the History screen
+        // used to come forward still showing History, which answers a request for settings with a
+        // list of loot.
         if (_shell is not null)
         {
-            _shell.Activate();
+            _shell.Show(0);
             return;
         }
 
@@ -134,7 +137,21 @@ public sealed class TrayApplicationContext : ApplicationContext
             Notify($"The loot history archive could not be read and was kept at {ex.QuarantinePath}. A new one was started.");
             archiveDoc = new ArchiveDocument();
         }
-        var historyScreen = new HistoryScreen(archiveDoc);
+        catch (Exception ex)
+        {
+            // Anything else — the file is there and readable but the directory is denied, the disk
+            // errors, a bug in Load — used to escape this method. It escaped after _syncTimer.Stop()
+            // above and before the FormClosed handler that restarts it was attached, so the window
+            // never opened AND automatic syncing was silently off until the app was restarted. The
+            // window opens on an empty list instead, saying why; nothing is written from it (the
+            // export path re-reads the archive itself and will fail the same way, loudly).
+            ShowUnexpectedError($"The loot history archive could not be opened: {ex.Message}");
+            archiveDoc = new ArchiveDocument();
+        }
+        // ArchiveStore.Load/Save, not a wrapper that answers an empty document on failure: the
+        // screen saves through this after an export, and an empty document saved over the archive
+        // would destroy the only copy of everything the game has already forgotten.
+        var historyScreen = new HistoryScreen(archiveDoc.Awards, ArchiveStore.Load, ArchiveStore.Save);
 
         _shell = new CompanionShell(new IScreen[] { settingsScreen, historyScreen }, _logo, _appIcon);
         _shell.FormClosed += (_, _) =>

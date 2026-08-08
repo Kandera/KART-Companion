@@ -28,6 +28,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   are disabled, and `Ctrl+A` selects everything the filters currently show. A withdrawn award is
   never exported, decided against the archive as it is at the moment the button is pressed.
 - **Save a copy** of an export to a file without recording the export.
+- **Correcting an award.** The history window can correct an award's **player** and **reason**, and
+  mark an award as **never exported** — for a row a defect logged wrongly. The addon's own values are
+  kept alongside the correction, so "Use the addon's values" always gets back exactly what the game
+  wrote, including a field it never wrote at all. Corrected values are shown in the accent colour, so
+  a correction never gets mistaken for a record from the game.
+- Corrections live in the Companion's archive only. **Nothing is written back into the game's files** —
+  the addon keeps its own record, and a correction there is still made in the game, by revoking and
+  re-deciding.
 
 ### Fixed
 - The Settings dialog rebuilt the config from a fixed list of fields on OK, dropping any field it

@@ -2,7 +2,7 @@ using KARTCompanion.SavedVariables;
 
 namespace KARTCompanion.Archive;
 
-public sealed record MergeResult(int Added, int Updated, int Withdrawn);
+public sealed record MergeResult(int Added, int Updated, int Withdrawn, int Skipped);
 
 /// <summary>
 /// Folds one snapshot of the game's loot history into the archive.
@@ -21,6 +21,12 @@ public sealed record MergeResult(int Added, int Updated, int Withdrawn);
 ///   * a revoke — what is left: neither the oldest, nor explained by an epoch change
 ///
 /// Nothing is deleted. A withdrawal is recorded, and a later export leaves those out.
+///
+/// An entry with no id is never archived at all, regardless of any of the above. The maintainer's
+/// 133 real pre-release entries have no id, and they are not distinct awards: they are the same
+/// award observed once per syncing client, from bugs the id-minting release fixed. There is no key
+/// that can tell those apart from a genuine repeat without the id, so entries without one are
+/// counted and skipped rather than given a synthetic key that would misrepresent them.
 /// </summary>
 public static class ArchiveMerger
 {
@@ -30,20 +36,23 @@ public static class ArchiveMerger
         string sourceFile,
         DateTimeOffset now)
     {
-        // First occurrence wins: a duplicate derived key within one snapshot should not occur (see
-        // LootHistoryEntry's own doc comment on why) and none exist in the real file, but a merge is
+        int added = 0, updated = 0, withdrawn = 0, skipped = 0;
+
+        // First occurrence wins: a duplicate id within one snapshot should not occur, but a merge is
         // a bad place to discover otherwise — skip the repeat rather than aborting the whole pass.
         var seen = new Dictionary<string, LootHistoryEntry>();
-        foreach (var entry in snapshot) seen.TryAdd(entry.Key, entry);
-
-        int added = 0, updated = 0, withdrawn = 0;
+        foreach (var entry in snapshot)
+        {
+            if (entry.Id == null) { skipped++; continue; }
+            seen.TryAdd(entry.Id, entry);
+        }
 
         var byKey = new Dictionary<string, ArchivedAward>();
         foreach (var award in doc.Awards) byKey.TryAdd(award.Key, award);
 
         foreach (var entry in seen.Values)
         {
-            if (byKey.TryGetValue(entry.Key, out var existing))
+            if (byKey.TryGetValue(entry.Id!, out var existing))
             {
                 // An entry legitimately changes: exported flips false -> true, and the item link is
                 // upgraded from the compact item string to the full link once the client resolves
@@ -74,9 +83,21 @@ public static class ArchiveMerger
 
         // Nothing to compare against: an empty snapshot cannot distinguish a wipe from a file we
         // simply could not read, so it explains nothing and withdraws nothing.
-        if (snapshot.Count == 0) return new MergeResult(added, updated, 0);
+        if (snapshot.Count == 0) return new MergeResult(added, updated, 0, skipped);
 
-        var oldestSurvivingTime = snapshot.Min(e => Time(e.Fields));
+        // A snapshot entry missing a usable "time" must not corrupt this boundary. Excluded here
+        // rather than contributing Time()'s default of 0, which would drag oldestSurvivingTime down
+        // to 0 and silently disable the cap check for every award in this pass — turning a correct
+        // excuse into a wrongful withdrawal. If NOTHING in the snapshot has a usable time, the
+        // boundary can't be established at all; the harmless reading wins there too, same as
+        // everywhere else in this method.
+        var survivingTimes = snapshot
+            .Select(e => TimeOrNull(e.Fields))
+            .Where(t => t != null)
+            .Select(t => t!.Value)
+            .ToList();
+        var oldestSurvivingTime = survivingTimes.Count > 0 ? (long?)survivingTimes.Min() : null;
+
         var survivingEpochs = snapshot
             .Select(e => Epoch(e.Fields))
             .Where(e => e != null)
@@ -94,8 +115,9 @@ public static class ArchiveMerger
             var time = Time(award.Fields);
             var epoch = Epoch(award.Fields);
 
-            // Explained by the cap: it is older than everything that survived.
-            if (time <= oldestSurvivingTime) continue;
+            // Explained by the cap: it is older than everything that survived. An unknown boundary
+            // reads the same as the cap explaining it — see the comment on survivingTimes above.
+            if (oldestSurvivingTime == null || time <= oldestSurvivingTime) continue;
 
             // Explained by a wipe: nothing at this award's epoch survived into the new snapshot. A
             // single saved-variables file only ever holds one non-null epoch at a time — LH.AdoptEpoch
@@ -115,7 +137,7 @@ public static class ArchiveMerger
             withdrawn++;
         }
 
-        return new MergeResult(added, updated, withdrawn);
+        return new MergeResult(added, updated, withdrawn, skipped);
     }
 
     // Applies `incoming` onto `existing.Fields` key-by-key — adding new keys and overwriting changed
@@ -155,6 +177,9 @@ public static class ArchiveMerger
 
     private static long Time(IReadOnlyDictionary<string, object?> f) =>
         f.TryGetValue("time", out var v) && v is double d ? (long)d : 0;
+
+    private static long? TimeOrNull(IReadOnlyDictionary<string, object?> f) =>
+        f.TryGetValue("time", out var v) && v is double d ? (long)d : null;
 
     private static long? Epoch(IReadOnlyDictionary<string, object?> f) =>
         f.TryGetValue("epoch", out var v) && v is double d ? (long)d : null;

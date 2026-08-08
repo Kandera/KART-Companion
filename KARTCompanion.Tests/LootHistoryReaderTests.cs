@@ -30,15 +30,19 @@ public class LootHistoryReaderTests
         Assert.All(entries, e => Assert.True(e.Fields.ContainsKey("time")));
     }
 
-    // This file predates the award id, so every entry must fall back to the derived key — and the
-    // derived keys must be distinct, or the archive would silently merge two different awards.
+    // This file predates the award id. The re-review found these 133 rows are not 133 distinct
+    // awards under any key — they are the same award observed once per syncing client (see
+    // ArchiveMergerTests and the round-3 report for the evidence). The maintainer ruled they are not
+    // archived at all: ArchiveMerger skips any entry without an id. What's worth pinning here is that
+    // the reader still parses every one of these 133 entries correctly, and that the absence of an
+    // id is real — the fact that makes them unarchivable, not a reader bug.
     [Fact]
-    public void Read_RealFile_HasNoIdsAndDerivedKeysAreUnique()
+    public void Read_RealFile_PreReleaseEntriesHaveNoId()
     {
         var entries = LootHistoryReader.Read(FixtureText());
 
+        Assert.Equal(133, entries.Count);
         Assert.All(entries, e => Assert.Null(e.Id));
-        Assert.Equal(entries.Count, entries.Select(e => e.Key).Distinct().Count());
     }
 
     [Fact]

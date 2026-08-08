@@ -32,15 +32,4 @@ public sealed class LootHistoryEntry
     public string? Id => Get<string>("id");
     public long? Epoch => Num("epoch");
     public bool? Exported => Fields.TryGetValue("exported", out var v) && v is bool b ? b : null;
-
-    /// <summary>
-    /// The key for entries written before sub-project 1 minted a stable id — the maintainer's live
-    /// file holds 133 of them. Two awards in the same second, to the same person, for the same item
-    /// do not occur. This is not a substitute for the minted id: it cannot survive a display-name
-    /// change and it is not what peers agree on. For an archive that only has to recognise its own
-    /// earlier snapshots, it is enough.
-    /// </summary>
-    public string DerivedKey => $"{Time}|{WinnerKey}|{Item}";
-
-    public string Key => Id ?? DerivedKey;
 }

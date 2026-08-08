@@ -26,7 +26,7 @@ public class ArchiveMergerTests
     public void Merge_SameSnapshotTwice_ChangesNothing()
     {
         var doc = new ArchiveDocument();
-        var snapshot = new[] { Entry(100, "P-1", "itemA"), Entry(200, "P-2", "itemB") };
+        var snapshot = new[] { Entry(100, "P-1", "itemA", id: "a"), Entry(200, "P-2", "itemB", id: "b") };
 
         var first = ArchiveMerger.Merge(doc, snapshot, Source, Now);
         var second = ArchiveMerger.Merge(doc, snapshot, Source, Now);
@@ -43,9 +43,10 @@ public class ArchiveMergerTests
     public void Merge_BackfilledOlderEntry_IsTakenIn()
     {
         var doc = new ArchiveDocument();
-        ArchiveMerger.Merge(doc, new[] { Entry(200, "P-2", "itemB") }, Source, Now);
+        ArchiveMerger.Merge(doc, new[] { Entry(200, "P-2", "itemB", id: "b") }, Source, Now);
 
-        ArchiveMerger.Merge(doc, new[] { Entry(100, "P-1", "itemA"), Entry(200, "P-2", "itemB") }, Source, Now);
+        ArchiveMerger.Merge(doc, new[] { Entry(100, "P-1", "itemA", id: "a"), Entry(200, "P-2", "itemB", id: "b") },
+            Source, Now);
 
         Assert.Equal(2, doc.Awards.Count);
         Assert.All(doc.Awards, a => Assert.False(a.Withdrawn));
@@ -57,11 +58,12 @@ public class ArchiveMergerTests
     public void Merge_OldestEntryGone_ReadsAsCapEvictionNotWithdrawal()
     {
         var doc = new ArchiveDocument();
-        ArchiveMerger.Merge(doc, new[] { Entry(100, "P-1", "itemA"), Entry(200, "P-2", "itemB") }, Source, Now);
+        ArchiveMerger.Merge(doc, new[] { Entry(100, "P-1", "itemA", id: "old"), Entry(200, "P-2", "itemB", id: "new") },
+            Source, Now);
 
-        ArchiveMerger.Merge(doc, new[] { Entry(200, "P-2", "itemB") }, Source, Now);
+        ArchiveMerger.Merge(doc, new[] { Entry(200, "P-2", "itemB", id: "new") }, Source, Now);
 
-        var gone = doc.Awards.Single(a => a.Key.StartsWith("100|", StringComparison.Ordinal));
+        var gone = doc.Awards.Single(a => a.Key == "old");
         Assert.False(gone.Withdrawn);
     }
 
@@ -105,14 +107,15 @@ public class ArchiveMergerTests
         Assert.Equal(3, doc.Awards.Count);
     }
 
-    // Entries written before sub-project 1 carry no epoch at all, so the wipe cause cannot be
-    // established for them. The rule must tolerate that rather than break on it, and the harmless
-    // reading wins: treated as evicted, so the award stays exportable.
+    // An award with no epoch at all (nothing in the file has resolved one yet, or this build never
+    // populates it for some other reason) must not crash the wipe check, and the harmless reading
+    // wins: treated as evicted, so the award stays exportable.
     [Fact]
     public void Merge_NoEpochAnywhere_DoesNotCrashAndPrefersTheHarmlessReading()
     {
         var doc = new ArchiveDocument();
-        ArchiveMerger.Merge(doc, new[] { Entry(100, "P-1", "itemA"), Entry(200, "P-2", "itemB") }, Source, Now);
+        ArchiveMerger.Merge(doc, new[] { Entry(100, "P-1", "itemA", id: "a"), Entry(200, "P-2", "itemB", id: "b") },
+            Source, Now);
 
         ArchiveMerger.Merge(doc, Array.Empty<LootHistoryEntry>(), Source, Now);
 
@@ -194,11 +197,11 @@ public class ArchiveMergerTests
 
     // Merge_NoEpochAnywhere_DoesNotCrashAndPrefersTheHarmlessReading merges an EMPTY snapshot, which
     // short-circuits before the withdrawal logic ever runs — it never actually reaches the
-    // epoch-is-null bail-out. Exercise the bail-out for real: a pre-epoch award disappears from a
+    // epoch-is-null bail-out. Exercise the bail-out for real: a no-epoch award disappears from a
     // non-empty snapshot that otherwise carries epochs, and is neither the oldest nor explained by an
     // epoch rise, so only the "unknown epoch" tolerance keeps it from being read as a revoke.
     [Fact]
-    public void Merge_PreEpochEntryGoneAmongEpochedEntries_ReadsAsHarmlessNotWithdrawn()
+    public void Merge_NoEpochEntryGoneAmongEpochedEntries_ReadsAsHarmlessNotWithdrawn()
     {
         var doc = new ArchiveDocument();
         ArchiveMerger.Merge(doc, new[]
@@ -377,36 +380,95 @@ public class ArchiveMergerTests
         Assert.Equal(0, second.Withdrawn);
     }
 
-    // Review round 2: MINOR 9 — NOT fixed. The prescribed fix (normalize the item field to its bare
-    // item id when building the derived key, so a compact "item:249331" reference and its later
-    // resolved chat link agree) was implemented and then reverted after testing it against the real
-    // fixture: KARTCompanion.Tests.Fixtures\loot-history-real.lua contains 11 groups (39 of the 133
-    // real awards) where the SAME base item id was awarded to the SAME winnerKey in the SAME second
-    // with DIFFERENT bonus-id suffixes (item-level test grants, e.g. eight distinct "Litany of
-    // Lightblind Wrath" variants to one winner at one timestamp). Collapsing the item field to its
-    // bare id merged those into 11 derived keys, regressing
-    // LootHistoryReaderTests.Read_RealFile_HasNoIdsAndDerivedKeysAreUnique from 133 unique keys to
-    // 94 — the archive would have silently conflated genuinely distinct awards, which is the same
-    // class of bug Minor 9 was raised to fix, just worse and silent. A bare reference is always
-    // byte-identical to any other bare reference of the same item (there is nothing in it to
-    // normalize), so a fix scoped narrowly enough to leave resolved links untouched cannot make a
-    // bare and a resolved form agree either — it would be a no-op. No key-normalization fix closes
-    // this gap without discarding the exact information that keeps real distinct awards apart. See
-    // the round-2 report for the recommendation (handle it below the derived key, not in it).
+    // Review round 2 revisited: MINOR 9 turned out not to be a key-normalization problem at all.
+    // The re-review established that the 133 no-id entries in the real fixture are not distinct
+    // awards under any key — they are the SAME award observed once per syncing client, from bugs the
+    // id-minting release fixed (see LootHistoryReaderTests.Read_RealFile_PreReleaseEntriesHaveNoId).
+    // The maintainer ruled those entries are not archived at all. See MINOR 9 (ROUND 3) below for
+    // what replaced it, and the round-3 report section for the corrected root cause — the round-2
+    // report and commit message still record the original, wrong theory ("distinct item variants")
+    // and are deliberately left unedited; the correction lives in the report instead.
 
-    // Review round 2: MINOR 10 — a duplicate derived key within one snapshot must not abort the
-    // whole merge. The design says this doesn't occur and the real file has none, but an unhandled
-    // exception discarding an entire pass over one bad entry is the wrong failure mode.
+    // Review round 3: id-less entries are never archived. There is no key that can tell a genuine
+    // repeat apart from the same award observed once per syncing client without the id, so an entry
+    // without one is counted and skipped rather than given a synthetic key.
     [Fact]
-    public void Merge_DuplicateKeysWithinOneSnapshot_SkipsInsteadOfThrowing()
+    public void Merge_SnapshotOfIdLessEntries_ArchivesNothingAndReportsSkipped()
     {
         var doc = new ArchiveDocument();
-        var duplicate1 = Entry(100, "P-1", "itemA");
-        var duplicate2 = Entry(100, "P-1", "itemA"); // same derived key as duplicate1
+
+        var result = ArchiveMerger.Merge(doc, new[]
+        {
+            Entry(100, "P-1", "itemA"),
+            Entry(200, "P-2", "itemB"),
+        }, Source, Now);
+
+        Assert.Empty(doc.Awards);
+        Assert.Equal(0, result.Added);
+        Assert.Equal(2, result.Skipped);
+    }
+
+    // A snapshot can mix id-less entries (skipped) with proper ones (archived normally) — the two
+    // don't interfere with each other's counts.
+    [Fact]
+    public void Merge_MixOfIdAndIdLessEntries_ArchivesOnlyTheIdedOnes()
+    {
+        var doc = new ArchiveDocument();
+
+        var result = ArchiveMerger.Merge(doc, new[]
+        {
+            Entry(100, "P-1", "itemA"),
+            Entry(200, "P-2", "itemB", id: "b"),
+        }, Source, Now);
+
+        Assert.Equal(1, result.Added);
+        Assert.Equal(1, result.Skipped);
+        Assert.Equal("b", Assert.Single(doc.Awards).Key);
+    }
+
+    // Review round 3, MINOR 10 (rescoped): a duplicate real id within one snapshot must not abort
+    // the whole merge, the same defensive reasoning as before — just against ids instead of the
+    // now-removed derived key. This case only arises against real ids now.
+    [Fact]
+    public void Merge_DuplicateIdWithinOneSnapshot_SkipsInsteadOfThrowing()
+    {
+        var doc = new ArchiveDocument();
+        var duplicate1 = Entry(100, "P-1", "itemA", id: "a");
+        var duplicate2 = Entry(100, "P-1", "itemA", id: "a"); // same id as duplicate1
 
         var result = ArchiveMerger.Merge(doc, new[] { duplicate1, duplicate2 }, Source, Now);
 
         Assert.Single(doc.Awards);
         Assert.Equal(1, result.Added);
+    }
+
+    // Review round 3, the re-review's time-less hole: Time() defaults to 0 for an entry missing
+    // "time" (nil, non-numeric, or absent), and the cap boundary used to be computed as
+    // snapshot.Min(Time), so a single such entry dragged oldestSurvivingTime down to 0 and silently
+    // disabled the cap check for the WHOLE pass — turning a correct cap-eviction excuse into a
+    // wrongful withdrawal. "old" here is genuinely cap-evicted (older than every entry that has a
+    // usable time in the new snapshot); the time-less entry must not be able to prevent that reading.
+    [Fact]
+    public void Merge_SnapshotHasEntryWithoutTime_DoesNotDisableTheCapCheck()
+    {
+        var doc = new ArchiveDocument();
+        ArchiveMerger.Merge(doc, new[]
+        {
+            Entry(100, "P-1", "itemA", id: "old", epoch: 1),
+            Entry(200, "P-2", "itemB", id: "b", epoch: 1),
+        }, Source, Now);
+
+        var timeless = new Dictionary<string, object?>
+        {
+            ["winnerKey"] = "P-3",
+            ["item"] = "itemC",
+            ["id"] = "c",
+            ["epoch"] = 1.0,
+        }; // deliberately no "time" key at all
+
+        ArchiveMerger.Merge(doc,
+            new[] { Entry(200, "P-2", "itemB", id: "b", epoch: 1), new LootHistoryEntry(timeless) }, Source, Now);
+
+        Assert.False(doc.Awards.Single(x => x.Key == "old").Withdrawn);
     }
 }

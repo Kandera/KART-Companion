@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.5.0] - 2026-08-08
+
+### Added
+- **Loot history archive.** The Companion reads the addon's `KART_LootHistory` out of the WoW
+  SavedVariables file and keeps its own copy in `%AppData%\KARTCompanion\loot-history.json`, so
+  history survives the addon's 500-entry cap and its raid-wide wipe. Read on each sync tick, plus a
+  **"Read loot history now"** entry in the tray menu. Reading only — nothing is written back into
+  the game's files, and no contact is made with the game process: staleness is decided purely by
+  the SavedVariables file's last-write time.
+- Awards that vanish from a snapshot are classified as cap-evicted, wiped, or **withdrawn** (a
+  revoke or a re-decision). Nothing is deleted from the archive; a withdrawal is recorded so a
+  later export can leave it out instead of crediting somebody with an item that was taken back.
+- All Battle.net account folders are archived, not just the configured one, and the balloon says
+  when there is more than one.
+- `ArchiveStore.Save` keeps one generation of the previous archive as `loot-history.json.bak`. An
+  archive that cannot be read — or that this build does not understand — is moved aside and
+  reported, never replaced.
+
+### Fixed
+- The Settings dialog rebuilt the config from a fixed list of fields on OK, dropping any field it
+  did not name.
+
 ## [1.4.0] - 2026-07-18
 
 ### Added

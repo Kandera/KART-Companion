@@ -37,6 +37,10 @@ public sealed class ArchivedAward
 
 public sealed class ArchiveDocument
 {
-    public int Version { get; set; } = 1;
+    /// <summary>The only archive layout this build understands. ArchiveStore.Load refuses anything
+    /// else rather than guessing at it — see the validation there.</summary>
+    public const int CurrentVersion = 1;
+
+    public int Version { get; set; } = CurrentVersion;
     public List<ArchivedAward> Awards { get; set; } = new();
 }

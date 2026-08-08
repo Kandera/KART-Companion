@@ -37,4 +37,18 @@ public sealed class CompanionConfig
     public Dictionary<string, DateTimeOffset> LootHistoryReadAt { get; set; } = new();
 
     public bool IsComplete => !string.IsNullOrWhiteSpace(GroupKey) && !string.IsNullOrWhiteSpace(SavedVariablesFilePath);
+
+    /// <summary>
+    /// A copy carrying every field, for callers that want to change a few of them without rebuilding
+    /// the object out of named properties. The Settings dialog did rebuild it that way and so
+    /// silently dropped LootHistoryReadAt on every OK — harmless only because the merge is
+    /// idempotent, and it would have swallowed the next field anyone added. MemberwiseClone cannot
+    /// omit a field; the one mutable collection is copied so the two objects stay independent.
+    /// </summary>
+    public CompanionConfig Copy()
+    {
+        var copy = (CompanionConfig)MemberwiseClone();
+        copy.LootHistoryReadAt = new Dictionary<string, DateTimeOffset>(LootHistoryReadAt);
+        return copy;
+    }
 }

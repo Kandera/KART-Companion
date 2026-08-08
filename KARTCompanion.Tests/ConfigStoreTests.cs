@@ -42,4 +42,53 @@ public class ConfigStoreTests : IDisposable
         var leftovers = Directory.GetFiles(_tempDir).Where(f => f != _configPath);
         Assert.Empty(leftovers);
     }
+
+    // Final review, MINOR 1: the Settings dialog rebuilt CompanionConfig out of six named
+    // properties, so LootHistoryReadAt was silently dropped on every OK — and so would be the next
+    // field anyone adds. It now copies instead. Comparing the serialized form rather than a
+    // hand-written list of properties is the point: a field added later is covered by this test
+    // without anyone remembering to come back here, as long as the fixture below sets it.
+    [Fact]
+    public void Copy_CarriesEveryField_NotJustTheOnesSettingsKnowsAbout()
+    {
+        var original = new CompanionConfig
+        {
+            GroupKey = "key",
+            WowInstallPath = @"C:\wow",
+            SavedVariablesFilePath = @"C:\wow\sv.lua",
+            SyncIntervalMinutes = 42,
+            AutoSyncEnabled = false,
+            LastSyncUtc = DateTimeOffset.FromUnixTimeSeconds(1785400000),
+            LootHistoryReadAt = { [@"C:\wow\sv.lua"] = DateTimeOffset.FromUnixTimeSeconds(1785300000) },
+        };
+
+        var copy = original.Copy();
+
+        Assert.Equal(JsonSerializer.Serialize(original), JsonSerializer.Serialize(copy));
+        // ...and the fixture really does differ from a default config in every writable field, so
+        // "carried" above cannot be satisfied by two objects that are both empty.
+        var fresh = new CompanionConfig();
+        foreach (var property in typeof(CompanionConfig).GetProperties().Where(p => p.CanWrite))
+        {
+            Assert.NotEqual(
+                JsonSerializer.Serialize(property.GetValue(fresh)),
+                JsonSerializer.Serialize(property.GetValue(original)));
+        }
+    }
+
+    // A shallow copy would share the one mutable collection, so changing the dialog's copy would
+    // reach back into the config the tray is still using.
+    [Fact]
+    public void Copy_DoesNotShareTheReadStampDictionary()
+    {
+        var original = new CompanionConfig
+        {
+            LootHistoryReadAt = { [@"C:\wow\sv.lua"] = DateTimeOffset.FromUnixTimeSeconds(1785300000) },
+        };
+
+        var copy = original.Copy();
+        copy.LootHistoryReadAt[@"D:\other.lua"] = DateTimeOffset.FromUnixTimeSeconds(1785310000);
+
+        Assert.Single(original.LootHistoryReadAt);
+    }
 }

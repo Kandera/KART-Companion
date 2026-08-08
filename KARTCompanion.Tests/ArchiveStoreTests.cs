@@ -32,6 +32,7 @@ public class ArchiveStoreTests : IDisposable
         {
             Fields = new Dictionary<string, object?>
             {
+                ["id"] = "award-1",
                 ["time"] = 1785356434d,
                 ["winner"] = "Raider01",
                 ["item"] = "|cffa335ee|Hitem:249331::::::::80:::::|h[Gloves]|h|r",
@@ -105,6 +106,7 @@ public class ArchiveStoreTests : IDisposable
         {
             Fields = new Dictionary<string, object?>
             {
+                ["id"] = "award-1",
                 ["time"] = 1785356434d,
                 ["color"] = new Dictionary<string, object?>
                 {
@@ -139,4 +141,59 @@ public class ArchiveStoreTests : IDisposable
         Assert.True(File.Exists(ex.QuarantinePath), "the unreadable archive must still exist somewhere");
         Assert.False(File.Exists(Path_), "the null-literal file is moved, not left in place");
     }
+
+    // Final review, MINOR 2: Load validated nothing — not even Version. An archive that was
+    // hand-edited, or written by an intermediate build, held awards with no id; ArchivedAward.Key
+    // then threw on every later pass with only a generic crash balloon, and the feature stopped for
+    // good. Fail at load instead, where the file is quarantined intact.
+    [Fact]
+    public void Load_AwardWithoutId_QuarantinesInsteadOfThrowingOnEveryLaterPass()
+    {
+        var text = """
+            { "Version": 1, "Awards": [ { "Fields": { "time": 1 }, "SourceFile": "C:\\wow\\file.lua" } ] }
+            """;
+        File.WriteAllText(Path_, text);
+
+        var ex = Assert.Throws<ArchiveUnreadableException>(() => ArchiveStore.Load(Path_));
+
+        Assert.Equal(text, File.ReadAllText(ex.QuarantinePath));
+        Assert.False(File.Exists(Path_), "the invalid archive is moved, not left in place");
+    }
+
+    [Fact]
+    public void Load_UnknownVersion_QuarantinesInsteadOfGuessingAtTheLayout()
+    {
+        var text = """{ "Version": 99, "Awards": [] }""";
+        File.WriteAllText(Path_, text);
+
+        var ex = Assert.Throws<ArchiveUnreadableException>(() => ArchiveStore.Load(Path_));
+
+        Assert.Equal(text, File.ReadAllText(ex.QuarantinePath));
+        Assert.False(File.Exists(Path_), "the unknown-version archive is moved, not left in place");
+    }
+
+    // Final review: Save overwrote in place with no copy anywhere, and the design's own premise is
+    // that this file cannot be regenerated. One generation of history is the cheapest protection
+    // available against a bad merge or a bug in a future build.
+    [Fact]
+    public void Save_OverwritingAnExistingArchive_KeepsThePreviousGenerationAsBak()
+    {
+        var first = new ArchiveDocument();
+        first.Awards.Add(Award("award-1"));
+        ArchiveStore.Save(first, Path_);
+
+        var second = new ArchiveDocument();
+        second.Awards.Add(Award("award-2"));
+        ArchiveStore.Save(second, Path_);
+
+        var backup = ArchiveStore.Load(Path_ + ArchiveStore.BackupSuffix);
+        Assert.Equal("award-1", Assert.Single(backup.Awards).Key);
+        Assert.Equal("award-2", Assert.Single(ArchiveStore.Load(Path_).Awards).Key);
+    }
+
+    private static ArchivedAward Award(string id) => new()
+    {
+        Fields = new Dictionary<string, object?> { ["id"] = id, ["time"] = 1785356434d },
+        SourceFile = @"C:\wow\file.lua",
+    };
 }

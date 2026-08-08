@@ -292,15 +292,21 @@ public sealed class SettingsForm : Form
         UpdateRailStatusDot(isError: _resolvedSavedVariablesPath is null);
     }
 
-    private CompanionConfig BuildResultFromFields() => new()
+    // Copy the config this dialog was opened with and overwrite only the fields it actually edits.
+    // Building a fresh CompanionConfig out of named properties dropped everything the dialog does
+    // not name: LootHistoryReadAt already was one of those, so pressing OK — or forcing a sync from
+    // in here — persisted a config with empty loot-history read stamps. This shape cannot omit a
+    // field, so the next one anyone adds survives without touching this method.
+    private CompanionConfig BuildResultFromFields()
     {
-        GroupKey = _groupKeyBox.Text.Trim(),
-        WowInstallPath = string.IsNullOrWhiteSpace(_wowPathBox.Text) ? null : _wowPathBox.Text.Trim(),
-        SavedVariablesFilePath = _resolvedSavedVariablesPath,
-        SyncIntervalMinutes = Math.Clamp(int.TryParse(_intervalBox.Text, out var minutes) ? minutes : 15, 1, 240),
-        AutoSyncEnabled = _autoSyncToggle.IsOn,
-        LastSyncUtc = Result.LastSyncUtc,
-    };
+        var config = Result.Copy();
+        config.GroupKey = _groupKeyBox.Text.Trim();
+        config.WowInstallPath = string.IsNullOrWhiteSpace(_wowPathBox.Text) ? null : _wowPathBox.Text.Trim();
+        config.SavedVariablesFilePath = _resolvedSavedVariablesPath;
+        config.SyncIntervalMinutes = Math.Clamp(int.TryParse(_intervalBox.Text, out var minutes) ? minutes : 15, 1, 240);
+        config.AutoSyncEnabled = _autoSyncToggle.IsOn;
+        return config;
+    }
 
     private void OnOk()
     {

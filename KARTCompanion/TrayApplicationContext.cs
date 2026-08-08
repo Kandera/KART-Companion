@@ -202,13 +202,14 @@ public sealed class TrayApplicationContext : ApplicationContext
             ? SavedVariablesLocator.ScanCommonInstallPaths()
             : SavedVariablesLocator.FindSavedVariablesFiles(_config.WowInstallPath);
 
-        if (files.Count > 1)
-        {
-            // Reading is not writing: a second Battle.net account is still the same person's loot,
-            // so all of them are read. But say so rather than merging silently — on a shared machine
-            // this would put somebody else's awards into the maintainer's WoWUtils import.
-            Notify($"Found {files.Count} account folders. All of them are being archived.");
-        }
+        // Reading is not writing: a second Battle.net account is still the same person's loot, so
+        // all of them are read. But say so rather than merging silently — on a shared machine this
+        // would put somebody else's awards into the maintainer's WoWUtils import. Carried as a note
+        // on whatever balloon this pass ends up showing rather than fired as its own: on its own it
+        // was shown on every single tick, so a two-account user got it every sync interval forever.
+        var accountsNote = files.Count > 1
+            ? $" Read from {files.Count} account folders."
+            : "";
 
         ArchiveDocument doc;
         try
@@ -222,7 +223,12 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
 
         var total = new MergeResult(0, 0, 0, 0);
-        var read = 0;
+        var unreadable = 0;
+        // The read stamps are held back until the archive is safely on disk. Recording them inside
+        // the loop meant that a failing ArchiveStore.Save left the stamps standing, so the file was
+        // skipped on every later tick until WoW rewrote it — and every award the cap evicted in
+        // that window was gone for good.
+        var pendingStamps = new Dictionary<string, DateTimeOffset>();
 
         foreach (var file in files)
         {
@@ -238,29 +244,41 @@ public sealed class TrayApplicationContext : ApplicationContext
             {
                 // A half-written or unfamiliar file contributes nothing. Do NOT record the stamp:
                 // the next tick should try again once the game has finished writing.
+                //
+                // But count it and say so. Swallowed silently, a shape the reader rejects — a
+                // future WoW build, a future addon version — makes every pass fail, every failure
+                // invisible, and the user is told "nothing new" by the one feature whose entire
+                // purpose is not losing data.
+                unreadable++;
                 continue;
             }
 
             var result = ArchiveMerger.Merge(doc, entries, file, DateTimeOffset.UtcNow);
             total = new MergeResult(total.Added + result.Added, total.Updated + result.Updated,
                                     total.Withdrawn + result.Withdrawn, total.Skipped + result.Skipped);
-            _config.LootHistoryReadAt[file] = stamp;
-            read++;
+            pendingStamps[file] = stamp;
         }
 
-        if (read == 0)
+        if (pendingStamps.Count == 0)
         {
-            if (announceNothingNew) Notify("No new loot history to read.");
+            if (unreadable > 0)
+                Notify($"Could not read {unreadable} saved-variables file(s); nothing was archived. It will be retried.{accountsNote}");
+            else if (announceNothingNew)
+                Notify("No new loot history to read." + accountsNote);
             return;
         }
 
         ArchiveStore.Save(doc);
+        foreach (var (file, stamp) in pendingStamps) _config.LootHistoryReadAt[file] = stamp;
         ConfigStore.Save(_config);
-        // Skipped is surfaced alongside Added rather than left to a log: a silent skip is exactly
-        // the shape of defect this project keeps finding. A user who updates the addon and later
-        // sees awards being skipped should be able to tell why from this same balloon.
-        var skippedNote = total.Skipped > 0 ? $" ({total.Skipped} skipped — no id)" : "";
-        Notify($"Archived {total.Added} new awards{skippedNote} ({doc.Awards.Count} in total).");
+        // Skipped and unreadable are surfaced alongside Added rather than left to a log: a silent
+        // skip is exactly the shape of defect this project keeps finding. A user who updates the
+        // addon and later sees awards being skipped should be able to tell why from this balloon.
+        var notes = new List<string>();
+        if (total.Skipped > 0) notes.Add($"{total.Skipped} skipped — no id");
+        if (unreadable > 0) notes.Add($"{unreadable} unreadable — will retry");
+        var note = notes.Count > 0 ? $" ({string.Join("; ", notes)})" : "";
+        Notify($"Archived {total.Added} new awards{note} ({doc.Awards.Count} in total).{accountsNote}");
     }
 
     private void Notify(string message)

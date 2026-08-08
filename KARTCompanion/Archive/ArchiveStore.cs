@@ -17,6 +17,9 @@ public static class ArchiveStore
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "KARTCompanion", "loot-history.json");
 
+    /// <summary>Appended to <see cref="ArchivePath"/> for the one-generation copy Save keeps.</summary>
+    public const string BackupSuffix = ".bak";
+
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
     private static readonly object SaveLock = new();
 
@@ -66,6 +69,11 @@ public static class ArchiveStore
             try
             {
                 File.WriteAllText(tempPath, json);
+                // One generation of history kept before the overwrite. The whole premise of this
+                // file is that the game has already forgotten what is in it, so there is no second
+                // copy to fall back on — and until now every save replaced it in place. A bad merge,
+                // a bad shutdown, or a bug in a future build otherwise takes the only copy with it.
+                if (File.Exists(path)) File.Copy(path, path + BackupSuffix, overwrite: true);
                 File.Move(tempPath, path, overwrite: true);
             }
             finally
@@ -85,6 +93,14 @@ public static class ArchiveStore
         var doc = JsonSerializer.Deserialize<ArchiveDocument>(json, Options);
         if (doc == null) return null;
 
+        // Anything this build does not understand is a quarantine case, not something to work
+        // around at merge time. Before this, a hand-edited archive — or one an intermediate build
+        // wrote — was loaded happily and then threw out of ArchivedAward.Key on every single pass,
+        // with nothing but a generic crash balloon to show for it and no way back.
+        if (doc.Version != ArchiveDocument.CurrentVersion)
+            throw new FormatException(
+                $"Archive version {doc.Version} is not {ArchiveDocument.CurrentVersion}, which is the only one this build understands.");
+
         foreach (var award in doc.Awards)
         {
             foreach (var key in award.Fields.Keys.ToList())
@@ -94,6 +110,12 @@ public static class ArchiveStore
                     award.Fields[key] = ConvertElement(el);
                 }
             }
+
+            // ArchiveMerger never archives an entry without an id, so one in the file means the
+            // document did not come from this program. ArchivedAward.Key would throw on it later;
+            // failing here means the file is quarantined intact rather than crashing every pass.
+            if (award.Fields.GetValueOrDefault("id") is not string id || id.Length == 0)
+                throw new FormatException("Archive holds an award with no id. ArchiveMerger never writes one.");
         }
 
         return doc;

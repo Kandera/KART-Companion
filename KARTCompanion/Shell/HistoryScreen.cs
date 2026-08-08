@@ -17,8 +17,9 @@ namespace KARTCompanion.Shell;
 /// why nothing is ever deleted from it).
 ///
 /// Exporting has one consequence no code here can remove: the Companion can stamp its own mark, but it
-/// cannot reach into the addon's SavedVariables to set the addon's "exported" field (that needs part
-/// 3's write-back). So a selection containing an award only the Companion has marked will, if exported
+/// cannot reach into the addon's SavedVariables to set the addon's "exported" field — writing back into
+/// the game's files was examined and deliberately dropped (see the design spec), not deferred. So a
+/// selection containing an award only the Companion has marked will, if exported
 /// again from the addon, go to WoWUtils a second time — it does not dedup. That is stated on screen
 /// rather than hidden or blocked (see UpdateFooter).
 ///
@@ -456,8 +457,10 @@ public sealed class HistoryScreen : IScreen
         e.DrawDefault = false;
     }
 
-    // Withdrawn awards are shown, not hidden — they are the only remaining record that an award was
-    // taken back — but set apart with Theme.TextDim, same as their "withdrawn" status text.
+    // Withdrawn and excluded awards are shown, not hidden — a withdrawn one is the only remaining
+    // record that an award was taken back, an excluded one is the maintainer's own call to hold it
+    // out — both set apart with Theme.TextDim, same as their status text. A corrected cell is a third
+    // colour, Theme.Accent, and keeps it even inside a dimmed row (see HistoryExportPlanner.EmphasisFor).
     private void DrawRow(object? sender, DrawListViewSubItemEventArgs e)
     {
         if (e.ItemIndex < 0 || e.ItemIndex >= _filtered.Count) { e.DrawDefault = false; return; }
@@ -665,10 +668,10 @@ public sealed class HistoryScreen : IScreen
         }
     }
 
-    // The count line the brief asks for, the state of the two buttons, and the one thing no code can
+    // The count line the brief asks for, the state of the three buttons, and the one thing no code can
     // fix: exporting again from the addon will re-send anything only the Companion has marked,
-    // because WoWUtils does not dedup and the Companion cannot set the addon's own mark (that needs
-    // part 3's write-back).
+    // because WoWUtils does not dedup and the Companion cannot set the addon's own mark — writing back
+    // into the game's files was examined and deliberately dropped, not deferred.
     //
     // All three are asked about the real selection. The notice in particular: it used to be asked
     // about "the selection, or everything shown if nothing is selected", and since Companion-exported
@@ -717,9 +720,9 @@ public static class HistoryExportPlanner
     /// StatusForComboIndex (to read it back), so the two can never drift apart into an off-by-one.</summary>
     public static readonly AwardStatus[] StatusOptions = Enum.GetValues<AwardStatus>();
 
-    /// <summary>The awards Copy/Save actually send: what is selected, minus every withdrawn award. A
-    /// withdrawn award is never exported no matter what was selected — the addon already deleted its
-    /// own copy of it.
+    /// <summary>The awards Copy/Save actually send: what is selected, minus every withdrawn or
+    /// excluded award. A withdrawn award is never exported no matter what was selected — the addon
+    /// already deleted its own copy of it — and neither is one the maintainer marked excluded.
     ///
     /// There is deliberately no "nothing selected means everything shown" fallback here. It existed,
     /// and on a 20,000-award archive one press of the primary button stamped 19,793 awards exported
@@ -783,11 +786,13 @@ public static class HistoryExportPlanner
         /// <summary>The maintainer corrected this exact field. Marked at the cell, not the row: once
         /// the Companion is what feeds WoWUtils, a corrected value is an ASSERTION by the maintainer
         /// rather than a record from the game, and the two must not look alike — six months on, nobody
-        /// remembers which is which.</summary>
+        /// remembers which is which. Outranks Held: a row that will never be exported can still carry
+        /// a correction, and the two facts are both true at once, so the corrected cell keeps showing
+        /// as corrected even inside a held row (see EmphasisFor).</summary>
         Edited,
 
         /// <summary>This award will not be exported at all — withdrawn by the game, or excluded by the
-        /// maintainer. The whole row, every column.</summary>
+        /// maintainer. The whole row, every column — except a column Edited already claimed.</summary>
         Held,
     }
 
@@ -801,14 +806,18 @@ public static class HistoryExportPlanner
         _ => null,
     };
 
+    /// <summary>Edited is checked before Held, and only for the one column the correction applies to:
+    /// a row can be both corrected and held back from export at once — the natural case is a defect
+    /// that got an award wrong, which is exactly what "excluded and corrected" looks like — and both
+    /// facts belong on screen together. The Held check therefore only ever sees the columns Edited
+    /// declined, so a row that is held but not edited still comes back Held for every column, same as
+    /// before.</summary>
     public static RowEmphasis EmphasisFor(ArchivedAward award, int columnIndex)
     {
-        if (award.Withdrawn || award.ExcludedFromExport) return RowEmphasis.Held;
-
         var field = FieldForColumn(columnIndex);
-        return field != null && AwardEditor.IsFieldEdited(award, field)
-            ? RowEmphasis.Edited
-            : RowEmphasis.Normal;
+        if (field != null && AwardEditor.IsFieldEdited(award, field)) return RowEmphasis.Edited;
+
+        return award.Withdrawn || award.ExcludedFromExport ? RowEmphasis.Held : RowEmphasis.Normal;
     }
 
     /// <summary>The line shown after an edit is saved. Says what now stands, not what changed: the
@@ -880,7 +889,7 @@ public static class HistoryExportPlanner
     }
 
     /// <summary>The awards a Copy or a Save would actually send, decided in the document handed in —
-    /// the selection's keys, minus anything withdrawn in THAT document.
+    /// the selection's keys, minus anything withdrawn or excluded in THAT document.
     ///
     /// Keys rather than award objects on purpose: the caller's objects belong to the snapshot its
     /// list was drawn from, and the decision has to be made against the archive as it is now.</summary>
@@ -921,9 +930,10 @@ public static class HistoryExportPlanner
     /// The whole Copy path in one tested place: load the archive fresh, decide what goes from THAT
     /// document, hand it to <paramref name="deliver"/> (the clipboard), stamp only what went, save.
     ///
-    /// The reload is not just about not overwriting a newer file. It is what makes "a withdrawn award
-    /// is never exported" true: the shell is modeless, and the tray's "Read loot history now" or the
-    /// background sync can mark an award Withdrawn — the addon deleted its own row — while this
+    /// The reload is not just about not overwriting a newer file. It is what makes "a withdrawn or
+    /// excluded award is never exported" true: the shell is modeless, and the tray's "Read loot
+    /// history now" or the background sync can mark an award Withdrawn — the addon deleted its own
+    /// row — while this
     /// window sits open showing a snapshot that still calls it open. Deciding from the caller's
     /// snapshot and stamping in a fresh one meant the stamp was correct and the export was not.
     /// Deciding and stamping in the same document is the only shape that cannot drift.

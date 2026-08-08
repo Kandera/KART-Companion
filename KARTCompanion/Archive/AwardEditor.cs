@@ -27,8 +27,12 @@ public static class AwardEditor
     /// Editing `id` orphans the row: the next snapshot no longer matches it, the merge re-adds the
     /// original, and the archive holds two.
     ///
-    /// Widening this later is a line of code — the rule everything rests on (the original is kept) does
-    /// not depend on how many fields are editable.
+    /// Widening this later is a line of code for the rule everything rests on — the original is kept —
+    /// which does not depend on how many fields are editable. It is not a line of code for the feature
+    /// as a whole: a third field also needs a box in AwardEditDialog, an entry in EditSelected's
+    /// hard-coded dictionary in HistoryScreen.cs, a case in HistoryExportPlanner.FieldForColumn, and a
+    /// line in EditSummary — and missing any one of those four is silent, not a red test: the field
+    /// would simply stay uneditable from the UI and never highlighted.
     /// </summary>
     public static readonly IReadOnlyList<string> EditableFields = new[] { "winner", "reason" };
 
@@ -54,9 +58,17 @@ public static class AwardEditor
     }
 
     /// <summary>Drops every correction on this award. What is left is exactly what the addon wrote,
-    /// including fields it never wrote at all — those become absent again, not present-and-empty.</summary>
+    /// including fields it never wrote at all — those become absent again, not present-and-empty.
+    ///
+    /// No production caller today: the dialog's "Use the addon's values" button refills the text boxes
+    /// instead and lets <see cref="Set"/> clear the edits on Save, reaching the same state. Kept for
+    /// its test, which pins the absent-not-empty behaviour above.</summary>
     public static void Revert(ArchivedAward award) => award.Edits.Clear();
 
+    /// <summary>No production caller today — HistoryExportPlanner.EmphasisFor and EditSummary both ask
+    /// per-field, via <see cref="IsFieldEdited"/>, because a corrected cell is marked at the field it
+    /// applies to, not at the whole award. Kept for its test, which pins that an award with no
+    /// corrections at all reports false.</summary>
     public static bool IsEdited(ArchivedAward award) => award.Edits.Count > 0;
 
     public static bool IsFieldEdited(ArchivedAward award, string field) => award.Edits.ContainsKey(field);

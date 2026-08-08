@@ -322,6 +322,28 @@ public class HistoryExportPlannerTests
         Assert.Equal(HistoryExportPlanner.RowEmphasis.Held, HistoryExportPlanner.EmphasisFor(excluded, 3));
     }
 
+    // The combination a defect actually produces: an award corrected AND held back. Both facts must
+    // show — the corrected column stays Edited even though the row is Held everywhere else. This is
+    // what pins the precedence in EmphasisFor: a naive reorder that decides Edited-vs-Held from
+    // AwardEditor.IsEdited (whole award) rather than AwardEditor.IsFieldEdited (this one column) gets
+    // the corrected column right by accident but wrongly promotes or fails to dim the OTHER column,
+    // which is what the second assertion in each pair below catches.
+    [Fact]
+    public void EmphasisFor_AnEditedCellKeepsItsEmphasisEvenInsideAHeldRow()
+    {
+        var excludedAndEdited = Award("e", excluded: true);
+        AwardEditor.Set(excludedAndEdited, "winner", "Thornfell");
+
+        Assert.Equal(HistoryExportPlanner.RowEmphasis.Edited, HistoryExportPlanner.EmphasisFor(excludedAndEdited, 1));
+        Assert.Equal(HistoryExportPlanner.RowEmphasis.Held, HistoryExportPlanner.EmphasisFor(excludedAndEdited, 3));
+
+        var withdrawnAndEdited = Award("w", withdrawn: true);
+        AwardEditor.Set(withdrawnAndEdited, "reason", "Offspec");
+
+        Assert.Equal(HistoryExportPlanner.RowEmphasis.Edited, HistoryExportPlanner.EmphasisFor(withdrawnAndEdited, 3));
+        Assert.Equal(HistoryExportPlanner.RowEmphasis.Held, HistoryExportPlanner.EmphasisFor(withdrawnAndEdited, 1));
+    }
+
     [Fact]
     public void EditSummary_NamesWhatWasCorrectedAndWhetherItIsExcluded()
     {

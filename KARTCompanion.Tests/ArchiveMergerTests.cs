@@ -556,7 +556,10 @@ public class ArchiveMergerTests
         {
             Fields = new Dictionary<string, object?>
             {
-                ["id"] = "a1", ["time"] = 100d, ["epoch"] = 1d, ["winner"] = "Bramblewick",
+                ["id"] = "a1",
+                ["time"] = 100d,
+                ["epoch"] = 1d,
+                ["winner"] = "Bramblewick",
             },
             SourceFile = "acct.lua",
             Edits = new Dictionary<string, string> { ["winner"] = "Thornfell" },

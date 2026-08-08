@@ -3,8 +3,9 @@ using System.Text.RegularExpressions;
 namespace KARTCompanion.Archive;
 
 /// <summary>
-/// Where an award stands relative to the two places it can be exported to. Withdrawn outranks every
-/// export state: an award that was taken back is not "exported", it is gone.
+/// Where an award stands relative to the two places it can be exported to. Withdrawn and Excluded both
+/// outrank every export state: an award that was taken back is not "exported", it is gone, and one the
+/// maintainer excluded will not be exported either way, whatever the addon or the Companion recorded.
 /// </summary>
 public enum AwardStatus
 {

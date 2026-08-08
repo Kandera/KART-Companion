@@ -18,6 +18,18 @@ public sealed class ArchivedAward
     /// </summary>
     public bool Withdrawn { get; set; }
 
+    /// <summary>
+    /// When this award was exported from the Companion, or null if it never was.
+    ///
+    /// Lives here rather than in Fields on purpose: Fields is a faithful copy of what the addon
+    /// wrote, and it stays that way — which also means ArchiveMerger's ApplyFields, writing only
+    /// keys a snapshot carries, can never clear this.
+    ///
+    /// A timestamp rather than a bool: "exported on Tuesday" answers a question "exported: yes"
+    /// does not.
+    /// </summary>
+    public DateTimeOffset? ExportedByCompanionAt { get; set; }
+
     private string? Str(string key) => Fields.TryGetValue(key, out var v) ? v as string : null;
 
     // ArchiveMerger only ever archives entries that carry an id (see its own doc comment on why:

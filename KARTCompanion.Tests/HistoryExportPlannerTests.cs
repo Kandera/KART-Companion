@@ -568,4 +568,29 @@ public class HistoryExportPlannerTests
             " 1 more award(s) were exported than the list showed — a withdrawal was reversed since this list was drawn.",
             note);
     }
+
+    // The screen's edit round-trip end to end, with the Form left out: the dialog's three values go to
+    // ApplyAndSave, and the summary line describes what actually ended up in the archive — not what was
+    // typed. Typing the addon's own value back in is not a correction, and the line must not claim it was.
+    [Fact]
+    public void EditRoundTrip_SummaryDescribesTheSavedState()
+    {
+        var doc = new ArchiveDocument();
+        doc.Awards.Add(new ArchivedAward
+        {
+            Fields = new Dictionary<string, object?> { ["id"] = "a1", ["winner"] = "Bramblewick", ["reason"] = "BIS" },
+        });
+
+        var outcome = AwardEditor.ApplyAndSave(
+            "a1",
+            new Dictionary<string, string> { ["winner"] = "Thornfell", ["reason"] = "BIS" },
+            excludedFromExport: true,
+            () => doc,
+            _ => { });
+
+        var summary = HistoryExportPlanner.EditSummary(outcome.Award);
+        Assert.Contains("player", summary);
+        Assert.DoesNotContain("reason", summary);
+        Assert.Contains("excluded from every export", summary);
+    }
 }

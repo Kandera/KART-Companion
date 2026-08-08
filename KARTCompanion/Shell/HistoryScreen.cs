@@ -51,6 +51,7 @@ public sealed class HistoryScreen : IScreen
     private readonly Label _resultLabel;
     private readonly Button _copyButton;
     private readonly Button _saveButton;
+    private readonly Button _editButton;
 
     private IReadOnlyList<ArchivedAward> _awards;
     private IReadOnlyList<ArchivedAward> _filtered = Array.Empty<ArchivedAward>();
@@ -154,6 +155,10 @@ public sealed class HistoryScreen : IScreen
         _listView.DrawItem += (_, e) => e.DrawDefault = false;
         _listView.DrawSubItem += DrawRow;
         _listView.SelectedIndexChanged += (_, _) => UpdateFooter();
+        // Selection first, then the row: in a virtual ListView a ListViewItem handed out by
+        // RetrieveVirtualItem is not in the Items collection, so its Index is not dependable. A
+        // double-click has already selected the row it landed on, and SelectedIndices is.
+        _listView.MouseDoubleClick += (_, _) => EditSelected();
 
         _emptyLabel = new Label
         {
@@ -179,6 +184,12 @@ public sealed class HistoryScreen : IScreen
         _saveButton.Width = 140;
         _saveButton.Click += (_, _) => OnSaveCopy();
 
+        _editButton = Theme.CreateButton("Edit award…");
+        _editButton.Left = _saveButton.Right + 10;
+        _editButton.Top = 580;
+        _editButton.Width = 130;
+        _editButton.Click += (_, _) => EditSelected();
+
         _countLabel = FooterLabel(622);
         _noticeLabel = FooterLabel(644);
         _resultLabel = FooterLabel(666);
@@ -188,7 +199,7 @@ public sealed class HistoryScreen : IScreen
             playerLabel, _playerCombo, fromLabel, _fromBox, toLabel, _toBox,
             statusLabel, _statusCombo, searchLabel, _searchBox,
             _dateWarningLabel, _listView, _emptyLabel,
-            _copyButton, _saveButton, _countLabel, _noticeLabel, _resultLabel,
+            _copyButton, _saveButton, _editButton, _countLabel, _noticeLabel, _resultLabel,
         });
 
         // Controls.AddRange leaves _listView in front of _emptyLabel (added right after it, but
@@ -457,7 +468,15 @@ public sealed class HistoryScreen : IScreen
         using (var backBrush = new SolidBrush(back))
             e.Graphics.FillRectangle(backBrush, e.Bounds);
 
-        var fore = award.Withdrawn ? Theme.TextDim : Theme.Text;
+        var fore = HistoryExportPlanner.EmphasisFor(award, e.ColumnIndex) switch
+        {
+            // Withdrawn or excluded: the whole row is set back, same treatment withdrawn rows already had.
+            HistoryExportPlanner.RowEmphasis.Held => Theme.TextDim,
+            // A corrected value is the maintainer speaking, not the game. It must not look like the
+            // rest of the row.
+            HistoryExportPlanner.RowEmphasis.Edited => Theme.Accent,
+            _ => Theme.Text,
+        };
         var bounds = e.Bounds;
         bounds.X += 6;
         bounds.Width -= 6;
@@ -488,6 +507,44 @@ public sealed class HistoryScreen : IScreen
             ResultKind.Error => Theme.Error,
             _ => Theme.TextDim,
         };
+    }
+
+    // Editing goes through AwardEditor.ApplyAndSave for the same reason exporting goes through
+    // ExportAndStamp: this screen holds a display snapshot, and the tray's "Read loot history now" and
+    // the background sync write the archive while the window sits open. The edit is applied to a
+    // freshly-read document, never to the object the list is drawn from.
+    private void EditSelected()
+    {
+        if (_listView.SelectedIndices.Count != 1) return;
+        var index = _listView.SelectedIndices[0];
+        if (index < 0 || index >= _filtered.Count) return;
+
+        var award = _filtered[index];
+        using var dialog = new AwardEditDialog(award);
+        if (dialog.ShowDialog(_view.FindForm()) != DialogResult.OK) return;
+
+        AwardEditor.EditOutcome outcome;
+        try
+        {
+            outcome = AwardEditor.ApplyAndSave(
+                award.Key,
+                new Dictionary<string, string>
+                {
+                    ["winner"] = dialog.Winner,
+                    ["reason"] = dialog.Reason,
+                },
+                dialog.ExcludedFromExport,
+                _loadArchive,
+                _saveArchive);
+        }
+        catch (Exception ex)
+        {
+            SetResult($"The correction could not be saved: {ex.Message}", ResultKind.Error);
+            return;
+        }
+
+        AdoptSnapshot(outcome.Document.Awards);
+        SetResult(HistoryExportPlanner.EditSummary(outcome.Award), ResultKind.Success);
     }
 
     // Copy for WoWUtils. Everything that matters happens inside
@@ -641,6 +698,10 @@ public sealed class HistoryScreen : IScreen
         // the user presses the button a second time to check the first press worked.
         _copyButton.Enabled = exportable.Count > 0;
         _saveButton.Enabled = exportable.Count > 0;
+
+        // Exactly one row: a correction is a statement about one award, and there is no sensible
+        // meaning for "apply this player name to twelve of them".
+        _editButton.Enabled = _listView.SelectedIndices.Count == 1;
     }
 }
 

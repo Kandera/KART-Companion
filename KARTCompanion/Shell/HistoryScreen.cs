@@ -213,8 +213,6 @@ public sealed class HistoryScreen : IScreen
 
         PopulateFilterOptions();
         RunFilter();
-
-        _view.Size = new Size(ContentLeft + ContentWidth + 12, 700);
     }
 
     // ---- control factories (kept tiny and local — there is no Theme helper for a plain filter

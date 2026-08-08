@@ -15,6 +15,18 @@ public sealed class CompanionShell : Form
     private const int RailWidth = 64;
     private const int ContentLeft = RailWidth + 16;
 
+    /// <summary>The one client size every screen fills. The shell decides this now, not whichever
+    /// screen happens to be current: each screen used to dictate ClientSize through its own
+    /// View.Size, and Settings' 488px and the history screen's 1042px disagreed, so the window
+    /// changed width on every switch — with Location set once at startup and never revisited, the
+    /// window grew rightward from wherever it was centred for the narrower screen, running the
+    /// history screen's right edge off-screen on a 1366px display.
+    ///
+    /// 1042 = ContentLeft (80) + 950 (the history list's own content width, needed for its six
+    /// columns) + 12 (its own right margin) — the widest of the two screens before this change, so
+    /// nothing here shrinks. 700 matches the history screen's own view height.</summary>
+    public static readonly Size ScreenSize = new(1042, 700);
+
     private readonly IReadOnlyList<IScreen> _screens;
     private readonly Panel _rail;
     private readonly Panel _railDivider;
@@ -136,6 +148,9 @@ public sealed class CompanionShell : Form
             // rail and header sit in front of it (see the BringToFront calls below) and cover
             // the strip a screen's View leaves blank on its left.
             screen.View.Location = Point.Empty;
+            // The shell owns sizing now (see ScreenSize) — a screen no longer sets its own
+            // View.Size to whatever it needs.
+            screen.View.Size = ScreenSize;
             screen.View.Visible = screen == Current;
             screen.View.SizeChanged += (_, _) => { if (screen == Current) SyncFrameToCurrentScreen(); };
             screen.StatusChanged += (_, _) => { if (screen == Current) UpdateRailStatusDot(); };
@@ -193,17 +208,19 @@ public sealed class CompanionShell : Form
         screen.OnShown();
     }
 
-    // The shell sizes itself to whatever the current screen needs, rather than assuming a fixed
-    // size — the same way the old SettingsForm grew its own ClientSize when a long SavedVariables
-    // path wrapped the status label onto more lines. Re-run on every SizeChanged of the current
-    // screen's View, not just on navigation, so that still works.
+    // The shell sizes itself to ScreenSize, the same for every screen — see that field's own
+    // remarks for why. Everything else this syncs (rail/divider height, header divider width, the
+    // close glyph's position) is worked out against the shell's own size, not the current screen's.
+    // Still re-run on every SizeChanged of the current screen's View: nothing sets that any more
+    // (a screen no longer grows itself — see e.g. SettingsScreen's fixed-height status card), but
+    // this stays wired in case that ever changes again.
     private void SyncFrameToCurrentScreen()
     {
-        ClientSize = Current.View.Size;
+        ClientSize = ScreenSize;
         _rail.Height = ClientSize.Height;
         _railDivider.Height = ClientSize.Height;
-        _headerDivider.Width = Current.View.Width - ContentLeft - 12;
-        _closeGlyph.Left = Current.View.Width - _closeGlyph.Width - 4;
+        _headerDivider.Width = ScreenSize.Width - ContentLeft - 12;
+        _closeGlyph.Left = ScreenSize.Width - _closeGlyph.Width - 4;
         _railStatusDot.Top = _rail.Height - 30;
     }
 

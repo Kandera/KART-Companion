@@ -38,6 +38,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   re-deciding.
 
 ### Changed
+- **The shell window no longer resizes when you switch screens.** Settings and the history screen
+  used to each dictate their own window width (488px vs 1042px), so switching screens changed the
+  window's size — and since its position is only set once at startup, it grew rightward from
+  wherever it had been centred for the narrower screen, running the history screen off the right
+  edge of a 1366px-wide display. The shell now owns one fixed size (1042x700) that both screens
+  fill.
+- **Settings redesigned** to fill that wider frame: a Connection card (group key, WoW folder) and a
+  Sync card (interval, the two toggles) side by side, a full-width Status card below them, then the
+  buttons. The status line is now a single line with an ellipsis and a tooltip for a long
+  SavedVariables path, plus a "Last sync" line. Same settings, same behaviour — no functional
+  change. The two remaining German strings ("Automatisch synchronisieren", "Mit Windows starten")
+  are now "Sync automatically" and "Start with Windows".
 - **History list's Difficulty column is now Raid.** It shows the raid name and its difficulty
   (`March on Quel'Danas — Mythic`) once the addon starts logging `instance`/`instanceID` on new
   awards; existing awards, which never carry those fields, keep showing just the difficulty. The

@@ -27,6 +27,10 @@ public sealed class CompanionShell : Form
     // something of their own (Settings' Cancel) supply their own and this is not used.
     private readonly Button _escapeCloseButton = new() { Size = Size.Empty, TabStop = false };
     private readonly List<(IScreen Screen, Control Icon, Panel AccentBar)> _navItems = new();
+    // False only during the constructor's own first SwitchTo(Current) call, which must run in full
+    // (it is what shows the very first screen at all). Once true, SwitchTo can tell "navigating to a
+    // different screen" apart from "already on this one" — see SwitchTo's own remarks.
+    private bool _started;
 
     public IScreen Current { get; private set; }
 
@@ -135,6 +139,7 @@ public sealed class CompanionShell : Form
             chrome.BringToFront();
 
         SwitchTo(Current);
+        _started = true;
         // ApplyRoundedFormRegion re-subscribes to Resize internally, so this needs to run only
         // once — later ClientSize changes from SwitchTo/SyncFrameToCurrentScreen already trigger
         // Resize, which re-applies the rounded Region on its own.
@@ -152,6 +157,14 @@ public sealed class CompanionShell : Form
 
     private void SwitchTo(IScreen screen)
     {
+        // Re-clicking the rail icon for whichever screen is already current used to re-run this in
+        // full, including OnShown() — harmless for Settings (its OnShown does nothing), but History's
+        // OnShown re-reads the archive and resets the list, silently dropping the user's selection for
+        // no reason (nothing about the screen actually changed). Guarded on _started, not just on
+        // screen == Current: Current is already set to screens[0] before the constructor's own first
+        // call here, and that first call is the one that has to run in full.
+        if (_started && screen == Current) return;
+
         foreach (var (s, _, accentBar) in _navItems) accentBar.Visible = s == screen;
         foreach (var s in _screens) s.View.Visible = s == screen;
         Current = screen;

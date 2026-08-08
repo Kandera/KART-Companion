@@ -387,4 +387,76 @@ public class HistoryExportPlannerTests
         Assert.Equal(new[] { "c" }, HistoryExportPlanner.ExportableFrom(doc, new[] { "c" }).Select(a => a.Key));
         Assert.Empty(HistoryExportPlanner.ExportableFrom(doc, Array.Empty<string>()));
     }
+
+    // Final review: an award withdrawn in the window's display snapshot but un-withdrawn in the
+    // archive by the time Copy re-reads it (ArchiveMerger.cs:85 — a withdrawal is reversible) makes
+    // MORE go out than the footer promised, not fewer. leftOut alone can never go negative to catch
+    // this, so the note needs the other direction too.
+    [Fact]
+    public void ExportDiscrepancyNote_MoreWentThanTheListShowed_ReportsTheExtra()
+    {
+        var note = HistoryExportPlanner.ExportDiscrepancyNote(
+            selectedCount: 2, shownExportableCount: 1, actuallyExportedCount: 2);
+
+        Assert.Equal(
+            " 1 more award(s) were exported than the list showed — a withdrawal was reversed since this list was drawn.",
+            note);
+    }
+
+    // The pre-existing direction (Task 5 / this wave): an award withdrawn between drawing and
+    // pressing Copy is left out, and that must still be reported the same way as before.
+    [Fact]
+    public void ExportDiscrepancyNote_FewerWentThanWereSelected_ReportsTheLeftOut()
+    {
+        var note = HistoryExportPlanner.ExportDiscrepancyNote(
+            selectedCount: 3, shownExportableCount: 3, actuallyExportedCount: 2);
+
+        Assert.Equal(" 1 withdrawn award(s) were left out.", note);
+    }
+
+    [Fact]
+    public void ExportDiscrepancyNote_ExportedMatchesWhatWasShown_IsBlank()
+    {
+        var note = HistoryExportPlanner.ExportDiscrepancyNote(
+            selectedCount: 2, shownExportableCount: 2, actuallyExportedCount: 2);
+
+        Assert.Equal("", note);
+    }
+
+    // The end-to-end shape of the defect: the window's display snapshot and the freshly-reloaded
+    // archive are TWO SEPARATE ArchivedAward instances that happen to share a Key — exactly what a
+    // real screen sees, since ArchiveStore.Load parses the file anew each call. A test built from one
+    // shared instance could not reproduce this: mutating the "archive" copy would mutate the
+    // "display" copy too, and the staleness this is about would not exist.
+    [Fact]
+    public void ExportDiscrepancyNote_EndToEnd_AwardUnWithdrawnSinceTheListWasDrawn()
+    {
+        // What the window drew: "x" shows withdrawn (and carries only the Companion's mark from an
+        // earlier export), "y" shows open. Both selected.
+        var displaySelected = new[]
+        {
+            Award("x", withdrawn: true, companionExported: DateTimeOffset.UnixEpoch),
+            Award("y"),
+        };
+        var shownExportableCount = HistoryExportPlanner.AwardsToExport(displaySelected).Count;
+        Assert.Equal(1, shownExportableCount); // the footer would have said "1 will be exported"
+
+        // The archive as ExportAndStamp actually reloads it: a separate object graph, same keys, "x"
+        // reappeared in a later snapshot and ArchiveMerger un-withdrew it.
+        var archive = new ArchiveDocument();
+        archive.Awards.Add(Award("x", withdrawn: false, companionExported: DateTimeOffset.UnixEpoch));
+        archive.Awards.Add(Award("y"));
+
+        var outcome = HistoryExportPlanner.ExportAndStamp(
+            displaySelected.Select(a => a.Key).ToList(), DateTimeOffset.UnixEpoch,
+            load: () => archive, deliver: _ => { }, save: _ => { });
+
+        Assert.Equal(2, outcome.Exported.Count); // both genuinely go — "x" is not withdrawn in truth
+
+        var note = HistoryExportPlanner.ExportDiscrepancyNote(
+            displaySelected.Length, shownExportableCount, outcome.Exported.Count);
+        Assert.Equal(
+            " 1 more award(s) were exported than the list showed — a withdrawal was reversed since this list was drawn.",
+            note);
+    }
 }

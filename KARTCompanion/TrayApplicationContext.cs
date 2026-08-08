@@ -67,7 +67,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             ContextMenuStrip = menu,
             Visible = true,
         };
-        _trayIcon.DoubleClick += (_, _) => OpenSettings();
+        _trayIcon.DoubleClick += (_, _) => BringShellForward();
 
         UpdateTooltip();
 
@@ -90,6 +90,22 @@ public sealed class TrayApplicationContext : ApplicationContext
         if (!_config.AutoSyncEnabled) return;
         _syncTimer.Interval = Math.Max(1, _config.SyncIntervalMinutes) * 60 * 1000;
         _syncTimer.Start();
+    }
+
+    // The tray icon's double-click, distinct from the "Settings..." menu entry: it must only bring
+    // whichever screen is already showing forward, not force the shell back to Settings — that used
+    // to route through OpenSettings' Show(0) and silently discard, say, a History selection the user
+    // was in the middle of making. Falls back to OpenSettings only when there is no shell yet, since
+    // that is also what creates one.
+    private void BringShellForward()
+    {
+        if (_shell is not null)
+        {
+            _shell.Show();
+            _shell.Activate();
+            return;
+        }
+        OpenSettings();
     }
 
     private void OpenSettings()

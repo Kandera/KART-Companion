@@ -504,6 +504,13 @@ public sealed class HistoryScreen : IScreen
     // failure it is untouched, so there is nothing to roll back.
     private void OnCopy()
     {
+        // Captured from the display snapshot before AdoptSnapshot below replaces it — what the
+        // footer promised, so the result line can say when reality disagreed with it either way
+        // (see ExportDiscrepancyNote).
+        var displaySelected = SelectedAwards();
+        var selectedCount = displaySelected.Count;
+        var shownExportableCount = HistoryExportPlanner.AwardsToExport(displaySelected).Count;
+
         // Which step failed decides what the user is being told and what they have to do about it,
         // and only the call site can tell them apart — the three exceptions are otherwise identical.
         var loaded = false;
@@ -512,7 +519,7 @@ public sealed class HistoryScreen : IScreen
         try
         {
             outcome = HistoryExportPlanner.ExportAndStamp(
-                SelectedKeys(), DateTimeOffset.UtcNow,
+                displaySelected.Select(a => a.Key).ToList(), DateTimeOffset.UtcNow,
                 () => { var fresh = _loadArchive(); loaded = true; return fresh; },
                 awards =>
                 {
@@ -538,7 +545,6 @@ public sealed class HistoryScreen : IScreen
             return;
         }
 
-        var selectedCount = _listView.SelectedIndices.Count;
         AdoptSnapshot(outcome.Document.Awards);
 
         if (outcome.Exported.Count == 0)
@@ -547,11 +553,11 @@ public sealed class HistoryScreen : IScreen
             return;
         }
 
-        // An award withdrawn between the list being drawn and the button being pressed is left out
-        // silently otherwise, and "Copied 11" against 12 selected rows is the kind of quiet
-        // discrepancy that gets explained away.
-        var leftOut = selectedCount - outcome.Exported.Count;
-        var note = leftOut > 0 ? $" {leftOut} withdrawn award(s) were left out." : "";
+        // The list drawn on screen can disagree with what actually went, in either direction — an
+        // award withdrawn since the list was drawn is left out silently otherwise, and "Copied 11"
+        // against 12 selected rows is the kind of quiet discrepancy that gets explained away; the
+        // reverse (a withdrawal reversed since the list was drawn) sends more than the list promised.
+        var note = HistoryExportPlanner.ExportDiscrepancyNote(selectedCount, shownExportableCount, outcome.Exported.Count);
         SetResult($"Copied {outcome.Exported.Count} award(s) to the clipboard and marked them exported.{note}", ResultKind.Success);
     }
 
@@ -618,7 +624,13 @@ public sealed class HistoryScreen : IScreen
 
         _countLabel.Text = HistoryExportPlanner.SelectionSummary(_filtered.Count, selected);
 
-        _noticeLabel.Text = HistoryExportPlanner.ContainsCompanionOnlyExport(exportable)
+        // Asked about the real selection, not the withdrawn-filtered exportable set: a display
+        // snapshot can show an award withdrawn when ArchiveMerger has since un-withdrawn it (a
+        // withdrawal is reversible), and pre-filtering it out here before the check would risk this
+        // — the one duplicate-export mitigation the design has — staying silent about an award about
+        // to genuinely export again. Asking about the selection over-warns for an award that turns
+        // out to stay withdrawn, which is the safe direction.
+        _noticeLabel.Text = HistoryExportPlanner.ContainsCompanionOnlyExport(selected)
             ? "Some of these were already exported by the Companion but not the addon — exporting again from the addon will send them a second time; WoWUtils does not dedup."
             : "";
 
@@ -746,6 +758,28 @@ public static class HistoryExportPlanner
     {
         var keys = new HashSet<string>(selectedKeys);
         return document.Awards.Where(a => keys.Contains(a.Key) && !a.Withdrawn).ToList();
+    }
+
+    /// <summary>The trailing note for the post-Copy result line, when what actually went disagrees
+    /// with what the list on screen promised. Two directions, never both at once:
+    ///
+    /// Fewer than selected: an award was withdrawn between the list being drawn and the button being
+    /// pressed, so it was left out.
+    ///
+    /// More than the list showed as exportable: the reverse — ArchiveMerger.cs sets Withdrawn back to
+    /// false when an award reappears in a later snapshot, so an award the list still shows withdrawn
+    /// can genuinely export by the time Copy re-reads the archive. leftOut alone can never go
+    /// negative to report this side; without it, "Copied 2" against a list that said "1 will be
+    /// exported" reads as a miscount instead of explaining itself.</summary>
+    public static string ExportDiscrepancyNote(int selectedCount, int shownExportableCount, int actuallyExportedCount)
+    {
+        var leftOut = selectedCount - actuallyExportedCount;
+        if (leftOut > 0) return $" {leftOut} withdrawn award(s) were left out.";
+
+        var extra = actuallyExportedCount - shownExportableCount;
+        if (extra > 0) return $" {extra} more award(s) were exported than the list showed — a withdrawal was reversed since this list was drawn.";
+
+        return "";
     }
 
     /// <summary>What an export did: the document it was decided in, and the awards that actually

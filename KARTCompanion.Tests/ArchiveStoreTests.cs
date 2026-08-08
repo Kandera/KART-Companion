@@ -76,4 +76,67 @@ public class ArchiveStoreTests : IDisposable
 
         Assert.Single(Directory.GetFiles(_dir));
     }
+
+    // Review finding (Critical 1): the quarantine name must not collide across two calls in the same
+    // second, or the second quarantine silently destroys the first one's bytes — the exact loss the
+    // quarantine exists to prevent.
+    [Fact]
+    public void Load_CorruptFile_Twice_DoesNotOverwritePriorQuarantine()
+    {
+        File.WriteAllText(Path_, "FIRST-CORRUPT");
+        var ex1 = Assert.Throws<ArchiveUnreadableException>(() => ArchiveStore.Load(Path_));
+
+        File.WriteAllText(Path_, "SECOND-CORRUPT");
+        var ex2 = Assert.Throws<ArchiveUnreadableException>(() => ArchiveStore.Load(Path_));
+
+        Assert.NotEqual(ex1.QuarantinePath, ex2.QuarantinePath);
+        Assert.Equal("FIRST-CORRUPT", File.ReadAllText(ex1.QuarantinePath));
+        Assert.Equal("SECOND-CORRUPT", File.ReadAllText(ex2.QuarantinePath));
+    }
+
+    // Review finding (Critical 2): the reader's nested-table fields (e.g. "color") come through as
+    // Dictionary<string, object?> values, not string/double/bool. A field shaped like that must survive
+    // the round trip, not come back as null.
+    [Fact]
+    public void SaveThenLoad_RoundTripsNestedTableField()
+    {
+        var doc = new ArchiveDocument();
+        doc.Awards.Add(new ArchivedAward
+        {
+            Fields = new Dictionary<string, object?>
+            {
+                ["time"] = 1785356434d,
+                ["color"] = new Dictionary<string, object?>
+                {
+                    ["r"] = 1d,
+                    ["g"] = 0.498d,
+                    ["b"] = 0.847d,
+                },
+            },
+            SourceFile = @"C:\wow\file.lua",
+        });
+
+        ArchiveStore.Save(doc, Path_);
+        var back = ArchiveStore.Load(Path_);
+
+        var award = Assert.Single(back.Awards);
+        var color = Assert.IsType<Dictionary<string, object?>>(award.Fields["color"]);
+        Assert.Equal(1d, color["r"]);
+        Assert.Equal(0.498d, color["g"]);
+        Assert.Equal(0.847d, color["b"]);
+    }
+
+    // Review finding (Important 3): a file whose entire content is the JSON literal "null" deserializes
+    // without throwing. Left alone, that reintroduces ConfigStore's "start fresh" behaviour through a
+    // side door in the one file where it must never happen.
+    [Fact]
+    public void Load_NullLiteralFile_QuarantinesInsteadOfReplacing()
+    {
+        File.WriteAllText(Path_, "null");
+
+        var ex = Assert.Throws<ArchiveUnreadableException>(() => ArchiveStore.Load(Path_));
+
+        Assert.True(File.Exists(ex.QuarantinePath), "the unreadable archive must still exist somewhere");
+        Assert.False(File.Exists(Path_), "the null-literal file is moved, not left in place");
+    }
 }

@@ -30,6 +30,29 @@ public class LootHistoryReaderTests
         Assert.All(entries, e => Assert.True(e.Fields.ContainsKey("time")));
     }
 
+    // The test above only asks whether the key is there. A reader that produced an EMPTY dictionary
+    // for every one of those 104 colors would satisfy it — and `color` is precisely the field that
+    // produced this project's nested-table Critical, where the plan claimed nested tables did not
+    // exist at all. So pin the CONTENT: the first award's real r/g/b out of the fixture, and the
+    // fact that the file carries more than one distinct color, which no constant placeholder has.
+    [Fact]
+    public void Read_RealFile_ReadsNestedTableContentNotJustItsPresence()
+    {
+        var entries = LootHistoryReader.Read(FixtureText());
+
+        var color = Assert.IsType<Dictionary<string, object?>>(entries[0].Fields["color"]);
+        Assert.Equal(0.8470588235294118, Assert.IsType<double>(color["r"]));
+        Assert.Equal(0.4980392156862745, Assert.IsType<double>(color["g"]));
+        Assert.Equal(1.0, Assert.IsType<double>(color["b"]));
+
+        var distinctReds = entries
+            .Where(e => e.Fields.ContainsKey("color"))
+            .Select(e => ((Dictionary<string, object?>)e.Fields["color"]!)["r"])
+            .Distinct()
+            .Count();
+        Assert.True(distinctReds > 1, $"Expected several distinct class colors, found {distinctReds}.");
+    }
+
     // This file predates the award id. The re-review found these 133 rows are not 133 distinct
     // awards under any key — they are the same award observed once per syncing client (see
     // ArchiveMergerTests and the round-3 report for the evidence). The maintainer ruled they are not
@@ -59,6 +82,20 @@ public class LootHistoryReaderTests
     public void Read_TruncatedBlock_Throws()
     {
         var text = "KART_LootHistory = {\n{\n[\"time\"] = 1785356434,\n[\"winner\"] = \"Raider01\",\n";
+
+        Assert.Throws<FormatException>(() => LootHistoryReader.Read(text));
+    }
+
+    // The test above ends MID-award, so the end-of-method "ended mid-award" guard catches it and the
+    // missing-closing-brace guard is never what fails — delete that guard and the test still passes.
+    // The physically likelier truncation is this one: a read that lands just after a "}," line yields
+    // a syntactically COMPLETE but short history. Without the missing-brace guard the reader hands it
+    // back as if it were the whole file, the newest awards look as though they never existed, and the
+    // merger reads real awards as withdrawn.
+    [Fact]
+    public void Read_TruncatedOnAnAwardBoundary_Throws()
+    {
+        var text = "KART_LootHistory = {\n{\n[\"time\"] = 1,\n[\"id\"] = \"a\",\n},\n";
 
         Assert.Throws<FormatException>(() => LootHistoryReader.Read(text));
     }

@@ -22,6 +22,18 @@ public class ArchiveMergerTests
         return new LootHistoryEntry(f);
     }
 
+    // The cap excuse now requires the snapshot to actually be at the addon's MAX_HISTORY_ENTRIES —
+    // below it the cap has evicted nothing. Pads a snapshot up to that size with awards newer than
+    // anything these tests care about, so the padding can never become the oldest survivor and can
+    // never change a verdict. Only the snapshot of the merge under test needs padding: the pads are
+    // simply added, and they are still there on every later merge in the same test.
+    private static LootHistoryEntry[] PaddedToCap(params LootHistoryEntry[] entries)
+    {
+        var pads = Enumerable.Range(0, ArchiveMerger.AddonHistoryCap - entries.Length)
+            .Select(i => Entry(1_000_000 + i, "P-pad", "itemPad", id: "pad-" + i, epoch: 1));
+        return entries.Concat(pads).ToArray();
+    }
+
     [Fact]
     public void Merge_SameSnapshotTwice_ChangesNothing()
     {
@@ -54,17 +66,50 @@ public class ArchiveMergerTests
 
     // Only the oldest ever falls to the cap. TrimHistory says so itself: "Enforces
     // MAX_HISTORY_ENTRIES by dropping the entry with the OLDEST timestamp, not index 1."
+    //
+    // Final review, IMPORTANT 1: the surviving snapshot has to be AT the cap for that sentence to
+    // apply, and both awards carry an epoch the snapshot still has, so the cap branch is the only
+    // thing that can excuse "old" here.
     [Fact]
     public void Merge_OldestEntryGone_ReadsAsCapEvictionNotWithdrawal()
     {
         var doc = new ArchiveDocument();
-        ArchiveMerger.Merge(doc, new[] { Entry(100, "P-1", "itemA", id: "old"), Entry(200, "P-2", "itemB", id: "new") },
-            Source, Now);
+        ArchiveMerger.Merge(doc, new[]
+        {
+            Entry(100, "P-1", "itemA", id: "old", epoch: 1),
+            Entry(200, "P-2", "itemB", id: "new", epoch: 1),
+        }, Source, Now);
 
-        ArchiveMerger.Merge(doc, new[] { Entry(200, "P-2", "itemB", id: "new") }, Source, Now);
+        ArchiveMerger.Merge(doc, PaddedToCap(Entry(200, "P-2", "itemB", id: "new", epoch: 1)), Source, Now);
 
         var gone = doc.Awards.Single(a => a.Key == "old");
         Assert.False(gone.Withdrawn);
+    }
+
+    // Final review, IMPORTANT 1 — the other side of the same gate, and the reviewer's own probe.
+    // The cap branch used to test ORDERING ONLY, so ANY revoke of the oldest surviving award was
+    // read as a cap eviction at any file size. Here the snapshot is 498 entries short of the cap:
+    // nothing can have been evicted, so the disappearance of the oldest award is a revoke, and an
+    // export that credited that player would hand them an item that was taken back off them.
+    [Fact]
+    public void Merge_OldestAwardGoneFromASnapshotFarBelowTheCap_ReadsAsWithdrawn()
+    {
+        var doc = new ArchiveDocument();
+        ArchiveMerger.Merge(doc, new[]
+        {
+            Entry(100, "P-1", "itemA", id: "a", epoch: 1),
+            Entry(200, "P-2", "itemB", id: "b", epoch: 1),
+            Entry(300, "P-3", "itemC", id: "c", epoch: 1),
+        }, Source, Now);
+
+        var result = ArchiveMerger.Merge(doc, new[]
+        {
+            Entry(200, "P-2", "itemB", id: "b", epoch: 1),
+            Entry(300, "P-3", "itemC", id: "c", epoch: 1),
+        }, Source, Now);
+
+        Assert.Equal(1, result.Withdrawn);
+        Assert.True(doc.Awards.Single(a => a.Key == "a").Withdrawn);
     }
 
     [Fact]
@@ -185,12 +230,11 @@ public class ArchiveMergerTests
             Entry(200, "P-2", "itemB", id: "b", epoch: 1),
         }, Source, Now);
 
-        // itemD drops out; itemA, at the same timestamp, is what survived as the new oldest.
-        ArchiveMerger.Merge(doc, new[]
-        {
+        // itemD drops out; itemA, at the same timestamp, is what survived as the new oldest. At the
+        // cap, so the cap excuse applies at all (final review, IMPORTANT 1).
+        ArchiveMerger.Merge(doc, PaddedToCap(
             Entry(100, "P-1", "itemA", id: "a", epoch: 1),
-            Entry(200, "P-2", "itemB", id: "b", epoch: 1),
-        }, Source, Now);
+            Entry(200, "P-2", "itemB", id: "b", epoch: 1)), Source, Now);
 
         Assert.False(doc.Awards.Single(a => a.Key == "d").Withdrawn);
     }
@@ -467,8 +511,36 @@ public class ArchiveMergerTests
         }; // deliberately no "time" key at all
 
         ArchiveMerger.Merge(doc,
-            new[] { Entry(200, "P-2", "itemB", id: "b", epoch: 1), new LootHistoryEntry(timeless) }, Source, Now);
+            PaddedToCap(Entry(200, "P-2", "itemB", id: "b", epoch: 1), new LootHistoryEntry(timeless)),
+            Source, Now);
 
         Assert.False(doc.Awards.Single(x => x.Key == "old").Withdrawn);
+    }
+
+    // Final review, IMPORTANT 1 (the same gate's other half): if NOTHING in a non-empty snapshot
+    // carries a usable time, the cap boundary cannot be established at all. That tolerance is
+    // separate from the at-the-cap gate — it must keep holding regardless of snapshot size, or a
+    // file whose times this build cannot read would withdraw every award it does not list.
+    [Fact]
+    public void Merge_SnapshotHasNoUsableTimeAtAll_DoesNotWithdrawAnything()
+    {
+        var doc = new ArchiveDocument();
+        ArchiveMerger.Merge(doc, new[]
+        {
+            Entry(100, "P-1", "itemA", id: "a", epoch: 1),
+            Entry(200, "P-2", "itemB", id: "b", epoch: 1),
+        }, Source, Now);
+
+        var timeless = new Dictionary<string, object?>
+        {
+            ["winnerKey"] = "P-3",
+            ["item"] = "itemC",
+            ["id"] = "c",
+            ["epoch"] = 1.0,
+        }; // deliberately no "time" key at all — and it is the whole snapshot
+
+        ArchiveMerger.Merge(doc, new[] { new LootHistoryEntry(timeless) }, Source, Now);
+
+        Assert.All(doc.Awards.Where(x => x.Key is "a" or "b"), x => Assert.False(x.Withdrawn));
     }
 }

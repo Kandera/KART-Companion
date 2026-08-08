@@ -17,7 +17,9 @@ public sealed record MergeResult(int Added, int Updated, int Withdrawn, int Skip
 ///   * a wipe   — nothing at this award's epoch survived in the new snapshot
 ///   * the cap  — only ever the oldest BY TIMESTAMP (TrimHistory: "dropping the entry with the
 ///                OLDEST timestamp, not index 1", because insertion order stops matching chronology
-///                once the catch-up backfills)
+///                once the catch-up backfills), and only out of a snapshot that is actually AT
+///                MAX_HISTORY_ENTRIES — below it the cap has evicted nothing, so being the oldest
+///                is no evidence at all
 ///   * a revoke — what is left: neither the oldest, nor explained by an epoch change
 ///
 /// Nothing is deleted. A withdrawal is recorded, and a later export leaves those out.
@@ -30,6 +32,21 @@ public sealed record MergeResult(int Added, int Updated, int Withdrawn, int Skip
 /// </summary>
 public static class ArchiveMerger
 {
+    /// <summary>
+    /// The addon's MAX_HISTORY_ENTRIES (KeineAhnungRaidTools, LootHistory.lua). The cap can only
+    /// have evicted anything from a snapshot that is actually at it, so the cap excuse is gated on
+    /// this — see the comment at the gate itself.
+    ///
+    /// This is the one place the addon's constant is duplicated into the Companion. If the addon
+    /// ever changes it, the error moves in a known direction:
+    ///   * addon cap LARGER than this value  — the Companion excuses too often. Harmless: at worst
+    ///     a revoked award stays exportable and shows up as a duplicate, which is visible.
+    ///   * addon cap SMALLER than this value — the Companion never excuses, and marks awards the
+    ///     cap genuinely evicted as withdrawn. Harmful: that data leaves the export silently.
+    /// So a stale value here is only safe while it is not below the addon's.
+    /// </summary>
+    public const int AddonHistoryCap = 500;
+
     public static MergeResult Merge(
         ArchiveDocument doc,
         IReadOnlyList<LootHistoryEntry> snapshot,
@@ -115,9 +132,20 @@ public static class ArchiveMerger
             var time = Time(award.Fields);
             var epoch = Epoch(award.Fields);
 
-            // Explained by the cap: it is older than everything that survived. An unknown boundary
-            // reads the same as the cap explaining it — see the comment on survivingTimes above.
-            if (oldestSurvivingTime == null || time <= oldestSurvivingTime) continue;
+            // The boundary could not be established at all — nothing in the snapshot carries a
+            // usable time. The harmless reading wins, same as everywhere else in this method. See
+            // the comment on survivingTimes above.
+            if (oldestSurvivingTime == null) continue;
+
+            // Explained by the cap: it is older than everything that survived — but ONLY if a cap
+            // eviction could have happened in the first place. Ordering alone is not evidence: in a
+            // snapshot well under the cap the oldest award is simply the oldest award, so a revoke
+            // of it looks exactly like an eviction and would be excused at any file size. That is
+            // not a rare shape — the file is empty after sub-project 1's one-time purge and empty
+            // again after every raid-wide wipe, so for the first weeks of an epoch the oldest entry
+            // in the file IS a recent award, and re-deciding the first item of the night through
+            // /kart add is ordinary lootmaster behaviour.
+            if (snapshot.Count >= AddonHistoryCap && time <= oldestSurvivingTime) continue;
 
             // Explained by a wipe: nothing at this award's epoch survived into the new snapshot. A
             // single saved-variables file only ever holds one non-null epoch at a time — LH.AdoptEpoch

@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace KARTCompanion.Archive;
 
 /// <summary>
@@ -16,6 +18,9 @@ public enum AwardStatus
 /// <summary>Answers questions of the archive: what state is this award in, and which awards match a filter.</summary>
 public static class ArchiveQuery
 {
+    // The display name inside a hyperlink's brackets: |c...|Hitem:...|h[Name]|h|r.
+    private static readonly Regex ItemNamePattern = new(@"\[(.*?)\]", RegexOptions.Compiled);
+
     public static AwardStatus StatusOf(ArchivedAward award)
     {
         // The addon's "exported" field has three states: false is new, true is exported, and absent
@@ -61,10 +66,26 @@ public static class ArchiveQuery
 
         if (search != null)
             query = query.Where(a =>
-                (Str(a, "item")?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                ItemDisplayName(Str(a, "item")).Contains(search, StringComparison.OrdinalIgnoreCase) ||
                 (Str(a, "reason")?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false));
 
         return query.OrderByDescending(Time).ToList();
+    }
+
+    /// <summary>
+    /// The item name a human sees — the text inside a hyperlink's brackets, or the raw value when it
+    /// carries no link (which is what a hand-written fixture holds).
+    ///
+    /// Both the list column and the search go through here, deliberately: searching the raw link
+    /// instead matched the item id, every bonus id, and the color code — so "cff" returned every row
+    /// and "212446" returned one for a number that is nowhere on screen. A search can only be
+    /// understood if it searches what is being shown.
+    /// </summary>
+    public static string ItemDisplayName(string? link)
+    {
+        if (string.IsNullOrEmpty(link)) return "";
+        var m = ItemNamePattern.Match(link);
+        return m.Success ? m.Groups[1].Value : link;
     }
 
     private static string? Str(ArchivedAward award, string key) =>

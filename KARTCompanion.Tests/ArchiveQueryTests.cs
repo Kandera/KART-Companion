@@ -96,6 +96,35 @@ public class ArchiveQueryTests
         var byItem = ArchiveQuery.Filter(awards, null, null, null, null, search: "lightblood");
 
         Assert.Equal("a", Assert.Single(byItem).Key);
+
+        // The reason half of the same claim. Without this the search could stop looking at reason
+        // altogether and every test still passed — "lightblood" is an item value, and award c's
+        // winner is the only thing standing in for "but not player".
+        var byReason = ArchiveQuery.Filter(awards, null, null, null, null, search: "transmog");
+
+        Assert.Equal("b", Assert.Single(byReason).Key);
+
+        // And nothing matches a player name that appears in no item and no reason.
+        Assert.Empty(ArchiveQuery.Filter(awards, null, null, null, null, search: "Sinja"));
+    }
+
+    // The list shows the item's display name, not the raw hyperlink, so the search has to look at
+    // the same text. Searching the link matched item ids, bonus ids and the color code "cff" — none
+    // of which is on screen, so a search for "212446" or "cff" returned rows for no visible reason.
+    [Fact]
+    public void Filter_BySearch_MatchesTheDisplayedItemNameNotTheRawLink()
+    {
+        const string link = "|cffa335ee|Hitem:212446::::::::80:71::5:3:10356:10353:1485:1:28:2164:::|h[Reverent Gnawer's Fang]|h|r";
+        var awards = new[]
+        {
+            Award("a", 100, "Alric", link, "BIS"),
+            Award("b", 200, "Sinja", "boots", "Upgrade"),
+        };
+
+        Assert.Equal("a", Assert.Single(ArchiveQuery.Filter(awards, null, null, null, null, search: "gnawer")).Key);
+        Assert.Empty(ArchiveQuery.Filter(awards, null, null, null, null, search: "212446"));
+        Assert.Empty(ArchiveQuery.Filter(awards, null, null, null, null, search: "cff"));
+        Assert.Empty(ArchiveQuery.Filter(awards, null, null, null, null, search: "10356"));
     }
 
     [Fact]

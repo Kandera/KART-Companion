@@ -14,7 +14,7 @@ public sealed record MergeResult(int Added, int Updated, int Withdrawn);
 /// against player A while player B is the one who got it.
 ///
 /// So a disappearance has to be explained. There are three causes and two of them leave evidence:
-///   * a wipe   — the epoch rose; everything below it is gone
+///   * a wipe   — nothing at this award's epoch survived in the new snapshot
 ///   * the cap  — only ever the oldest BY TIMESTAMP (TrimHistory: "dropping the entry with the
 ///                OLDEST timestamp, not index 1", because insertion order stops matching chronology
 ///                once the catch-up backfills)
@@ -30,23 +30,34 @@ public static class ArchiveMerger
         string sourceFile,
         DateTimeOffset now)
     {
-        var seen = snapshot.ToDictionary(e => e.Key, e => e);
+        // First occurrence wins: a duplicate derived key within one snapshot should not occur (see
+        // LootHistoryEntry's own doc comment on why) and none exist in the real file, but a merge is
+        // a bad place to discover otherwise — skip the repeat rather than aborting the whole pass.
+        var seen = new Dictionary<string, LootHistoryEntry>();
+        foreach (var entry in snapshot) seen.TryAdd(entry.Key, entry);
+
         int added = 0, updated = 0, withdrawn = 0;
 
-        var byKey = doc.Awards.ToDictionary(a => a.Key, a => a);
+        var byKey = new Dictionary<string, ArchivedAward>();
+        foreach (var award in doc.Awards) byKey.TryAdd(award.Key, award);
 
-        foreach (var entry in snapshot)
+        foreach (var entry in seen.Values)
         {
             if (byKey.TryGetValue(entry.Key, out var existing))
             {
                 // An entry legitimately changes: exported flips false -> true, and the item link is
-                // upgraded from the compact item string to the full link once the client resolves it.
-                existing.Fields = new Dictionary<string, object?>(entry.Fields);
+                // upgraded from the compact item string to the full link once the client resolves
+                // it. Merge field-wise rather than replacing the dictionary outright: a field this
+                // snapshot's source doesn't carry (color is missing from some read paths, present on
+                // 104 of 133 real awards) must not be silently dropped from an award another source
+                // already reported it on.
+                var fieldsChanged = ApplyFields(existing, entry.Fields);
+                var wasWithdrawn = existing.Withdrawn;
                 existing.LastSeen = now;
                 existing.SourceFile = sourceFile;
                 // Seeing it again is the game telling us it is not gone after all.
                 existing.Withdrawn = false;
-                updated++;
+                if (fieldsChanged || wasWithdrawn) updated++;
             }
             else
             {
@@ -66,7 +77,11 @@ public static class ArchiveMerger
         if (snapshot.Count == 0) return new MergeResult(added, updated, 0);
 
         var oldestSurvivingTime = snapshot.Min(e => Time(e.Fields));
-        var highestEpoch = snapshot.Select(e => Epoch(e.Fields)).Where(e => e != null).DefaultIfEmpty(null).Max();
+        var survivingEpochs = snapshot
+            .Select(e => Epoch(e.Fields))
+            .Where(e => e != null)
+            .Select(e => e!.Value)
+            .ToHashSet();
 
         foreach (var award in doc.Awards)
         {
@@ -82,10 +97,18 @@ public static class ArchiveMerger
             // Explained by the cap: it is older than everything that survived.
             if (time <= oldestSurvivingTime) continue;
 
-            // Explained by a wipe: the snapshot has moved to a higher epoch than this award's.
-            // Awards written before sub-project 1 carry no epoch; for those this cause cannot be
-            // established, and the harmless reading wins.
-            if (highestEpoch != null && epoch != null && epoch < highestEpoch) continue;
+            // Explained by a wipe: nothing at this award's epoch survived into the new snapshot. A
+            // single saved-variables file only ever holds one non-null epoch at a time — LH.AdoptEpoch
+            // drops every entry below the new epoch, and LH.AdmitEpoch refuses entries above the
+            // current one unless it adopts first — so "not among the surviving epochs" is the actual
+            // rule, not a proxy for "is this award's epoch lower than the snapshot's highest": it also
+            // covers a snapshot whose epoch went backwards, or one that lost its epoch fields
+            // entirely, both of which are evidence the file is stale or foreign rather than that
+            // anything was revoked.
+            if (epoch != null && !survivingEpochs.Contains(epoch.Value)) continue;
+
+            // Awards written before sub-project 1 carry no epoch; for those the wipe cause cannot be
+            // established at all, and the harmless reading wins.
             if (epoch == null) continue;
 
             award.Withdrawn = true;
@@ -93,6 +116,41 @@ public static class ArchiveMerger
         }
 
         return new MergeResult(added, updated, withdrawn);
+    }
+
+    // Applies `incoming` onto `existing.Fields` key-by-key — adding new keys and overwriting changed
+    // ones — and reports whether anything actually changed. A field `incoming` doesn't carry is left
+    // untouched rather than dropped; see LootHistoryEntry's own doc comment on why an absent field
+    // must never be read as "known to be nothing."
+    private static bool ApplyFields(ArchivedAward existing, IReadOnlyDictionary<string, object?> incoming)
+    {
+        var changed = false;
+        foreach (var (key, value) in incoming)
+        {
+            if (!existing.Fields.TryGetValue(key, out var current) || !FieldsEqual(current, value))
+            {
+                existing.Fields[key] = value;
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    // Fields can nest one level deep (color is a Dictionary<string, object?>); reference equality
+    // would report "changed" on every merge just because the new snapshot built a fresh dictionary
+    // instance with the same content.
+    private static bool FieldsEqual(object? a, object? b)
+    {
+        if (a is Dictionary<string, object?> da && b is Dictionary<string, object?> db)
+        {
+            if (da.Count != db.Count) return false;
+            foreach (var (key, value) in da)
+            {
+                if (!db.TryGetValue(key, out var otherValue) || !FieldsEqual(value, otherValue)) return false;
+            }
+            return true;
+        }
+        return Equals(a, b);
     }
 
     private static long Time(IReadOnlyDictionary<string, object?> f) =>

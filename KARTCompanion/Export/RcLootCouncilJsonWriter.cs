@@ -15,6 +15,16 @@ namespace KARTCompanion.Export;
 /// out of the item link even where that would be possible for the id alone. That is not a shortcut:
 /// it is what keeps this writer matching the addon's own behavior for any item that client has not
 /// (yet) cached, which is the same "unresolved" case the addon itself falls back to a zero id for.
+///
+/// <c>Write</c> always sorts newest-first and ignores the order it was given awards in. Every real
+/// caller wants exactly this — it is what LH.BuildRCLootCouncilJSON's own default (no explicit list)
+/// produces, and the export dialog has no other order to offer — so the writer owns it rather than
+/// pushing the same sort onto every call site.
+///
+/// The date/time fields are rendered in a caller-supplied time zone, defaulting to the machine's
+/// local zone (matching the addon, which uses Lua's date() and is therefore always local to whatever
+/// machine WoW is running on). The override exists so a test can pin the zone the golden fixture was
+/// actually captured in, rather than depending on whichever machine happens to run the test.
 /// </summary>
 public static class RcLootCouncilJsonWriter
 {
@@ -49,82 +59,27 @@ public static class RcLootCouncilJsonWriter
     // The display name inside a hyperlink's brackets: |c...|Hitem:...|h[Name]|h|r.
     private static readonly Regex ItemNamePattern = new(@"\[(.*?)\]", RegexOptions.Compiled);
 
-    public static string Write(IEnumerable<LootHistoryEntry> awards)
+    public static string Write(IEnumerable<LootHistoryEntry> awards, TimeZoneInfo? timeZone = null)
     {
-        var list = awards.ToList();
-        SortNewestFirst(list);
+        var zone = timeZone ?? TimeZoneInfo.Local;
+
+        // Newest first, mirroring LH.GetFilteredEntries. Awards sharing a second keep the order the
+        // saved-variables file had; the addon leaves that order to Lua's table.sort, which does not
+        // specify it, so the Companion pins it deliberately instead of imitating it.
+        var list = awards.OrderByDescending(e => e.Time).ToList();
 
         var objects = new List<string>();
         for (var i = 0; i < list.Count; i++)
         {
-            objects.Add(WriteObject(list[i], i + 1));
+            objects.Add(WriteObject(list[i], i + 1, zone));
         }
         return "[" + string.Join(",", objects) + "]";
     }
 
-    // Mirrors LH.GetFilteredEntries's `table.sort(filtered, function(a, b) return (a.time or 0) >
-    // (b.time or 0) end)` -- newest first. BuildRCLootCouncilJSON defaults to exactly this list when
-    // called with no explicit argument, which is how the addon's own cross-check fixture was
-    // generated, and how every real in-game export happens.
-    //
-    // Ported faithfully from Lua 5.1's ltablib.c auxsort, the same algorithm LuaJIT uses: a
-    // median-of-three quicksort, deterministic but NOT stable. Awards logged in the same second --
-    // the raid hands out several drops with identical timestamps often enough that the real fixture
-    // has 12 such groups among 133 awards -- come out in whatever order this specific in-place
-    // partitioning leaves them, not insertion order. A stable .NET sort disagrees with Lua here for
-    // every one of those groups, and reproducing the exact algorithm (not just the exact comparator)
-    // is what makes the byte-for-byte fixture comparison possible at all.
-    private static void SortNewestFirst(List<LootHistoryEntry> a) => AuxSort(a, 1, a.Count);
-
-    private static bool IsNewer(LootHistoryEntry a, LootHistoryEntry b) => a.Time > b.Time;
-
-    private static LootHistoryEntry At(List<LootHistoryEntry> a, int i) => a[i - 1];
-
-    private static void Swap(List<LootHistoryEntry> a, int i, int j) => (a[i - 1], a[j - 1]) = (a[j - 1], a[i - 1]);
-
-    private static void AuxSort(List<LootHistoryEntry> a, int l, int u)
-    {
-        while (l < u)
-        {
-            if (IsNewer(At(a, u), At(a, l))) Swap(a, l, u);
-            if (u - l == 1) break;
-
-            var i = (l + u) / 2;
-            if (IsNewer(At(a, i), At(a, l))) Swap(a, i, l);
-            else if (IsNewer(At(a, u), At(a, i))) Swap(a, i, u);
-            if (u - l == 2) break;
-
-            Swap(a, i, u - 1);
-            var pivot = At(a, u - 1);
-
-            i = l;
-            var j = u - 1;
-            while (true)
-            {
-                do { i++; } while (IsNewer(At(a, i), pivot));
-                do { j--; } while (IsNewer(pivot, At(a, j)));
-                if (j < i) break;
-                Swap(a, i, j);
-            }
-            Swap(a, u - 1, i);
-
-            if (i - l < u - i)
-            {
-                AuxSort(a, l, i - 1);
-                l = i + 1;
-            }
-            else
-            {
-                AuxSort(a, i + 1, u);
-                u = i - 1;
-            }
-        }
-    }
-
-    private static string WriteObject(LootHistoryEntry e, int index)
+    private static string WriteObject(LootHistoryEntry e, int index, TimeZoneInfo timeZone)
     {
         var time = e.Time;
-        var localTime = DateTimeOffset.FromUnixTimeSeconds(time).ToLocalTime();
+        var localTime = TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(time), timeZone);
 
         var fields = new[]
         {

@@ -1,3 +1,4 @@
+using KARTCompanion.Archive;
 using KARTCompanion.Config;
 using KARTCompanion.SavedVariables;
 using KARTCompanion.Simulations;
@@ -53,6 +54,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add("Sync now", null, async (_, _) => await SyncNowAsync());
         menu.Items.Add("Open WoW folder", null, (_, _) => OpenWowFolder());
         menu.Items.Add("Settings...", null, (_, _) => OpenSettings());
+        menu.Items.Add("Read loot history now", null, (_, _) => ReadLootHistory(announceNothingNew: true));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => ExitApp());
 
@@ -67,7 +69,11 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         UpdateTooltip();
 
-        _syncTimer.Tick += async (_, _) => await SyncNowAsync();
+        _syncTimer.Tick += async (_, _) =>
+        {
+            await SyncNowAsync();
+            ReadLootHistory(announceNothingNew: false);
+        };
         ApplyIntervalToTimer();
 
         if (!_config.IsComplete)
@@ -174,6 +180,94 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             return new SyncResult(false, 0, 0, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Reads every saved-variables file whose last-write time has moved since we last read it, and
+    /// folds each into the archive.
+    ///
+    /// Timestamp comparison, not a file watcher and not process watching. What we need to know is
+    /// "has the game written a new state", and a timestamp answers it without naming, enumerating or
+    /// opening a handle on the game process — the last of which is a common anti-cheat heuristic,
+    /// because it is how every memory cheat begins.
+    ///
+    /// Merging is idempotent because every award carries a stable key, so reading three times during
+    /// an evening or once after it produces the same archive.
+    /// </summary>
+    private void ReadLootHistory(bool announceNothingNew)
+    {
+        // WowInstallPath is what the user browsed to in Settings — the folder containing "_retail_",
+        // which is exactly what FindSavedVariablesFiles takes. No path arithmetic off the file path.
+        var files = string.IsNullOrWhiteSpace(_config.WowInstallPath)
+            ? SavedVariablesLocator.ScanCommonInstallPaths()
+            : SavedVariablesLocator.FindSavedVariablesFiles(_config.WowInstallPath);
+
+        if (files.Count > 1)
+        {
+            // Reading is not writing: a second Battle.net account is still the same person's loot,
+            // so all of them are read. But say so rather than merging silently — on a shared machine
+            // this would put somebody else's awards into the maintainer's WoWUtils import.
+            Notify($"Found {files.Count} account folders. All of them are being archived.");
+        }
+
+        ArchiveDocument doc;
+        try
+        {
+            doc = ArchiveStore.Load();
+        }
+        catch (ArchiveUnreadableException ex)
+        {
+            Notify($"The loot history archive could not be read and was kept at {ex.QuarantinePath}. A new one was started.");
+            doc = new ArchiveDocument();
+        }
+
+        var total = new MergeResult(0, 0, 0, 0);
+        var read = 0;
+
+        foreach (var file in files)
+        {
+            var stamp = new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
+            if (_config.LootHistoryReadAt.TryGetValue(file, out var last) && last == stamp) continue;
+
+            IReadOnlyList<LootHistoryEntry> entries;
+            try
+            {
+                entries = LootHistoryReader.Read(File.ReadAllText(file));
+            }
+            catch (Exception)
+            {
+                // A half-written or unfamiliar file contributes nothing. Do NOT record the stamp:
+                // the next tick should try again once the game has finished writing.
+                continue;
+            }
+
+            var result = ArchiveMerger.Merge(doc, entries, file, DateTimeOffset.UtcNow);
+            total = new MergeResult(total.Added + result.Added, total.Updated + result.Updated,
+                                    total.Withdrawn + result.Withdrawn, total.Skipped + result.Skipped);
+            _config.LootHistoryReadAt[file] = stamp;
+            read++;
+        }
+
+        if (read == 0)
+        {
+            if (announceNothingNew) Notify("No new loot history to read.");
+            return;
+        }
+
+        ArchiveStore.Save(doc);
+        ConfigStore.Save(_config);
+        // Skipped is surfaced alongside Added rather than left to a log: a silent skip is exactly
+        // the shape of defect this project keeps finding. A user who updates the addon and later
+        // sees awards being skipped should be able to tell why from this same balloon.
+        var skippedNote = total.Skipped > 0 ? $" ({total.Skipped} skipped — no id)" : "";
+        Notify($"Archived {total.Added} new awards{skippedNote} ({doc.Awards.Count} in total).");
+    }
+
+    private void Notify(string message)
+    {
+        _trayIcon.BalloonTipTitle = "KART Companion";
+        _trayIcon.BalloonTipText = message;
+        _trayIcon.ShowBalloonTip(4000);
     }
 
     private void ShowError(string message)

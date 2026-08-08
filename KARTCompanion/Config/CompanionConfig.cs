@@ -29,5 +29,12 @@ public sealed class CompanionConfig
 
     public DateTimeOffset? LastSyncUtc { get; set; }
 
+    /// <summary>
+    /// Last-write time of each saved-variables file the last time it was read into the archive,
+    /// keyed by full path. Compared against File.GetLastWriteTimeUtc on each tick — deliberately
+    /// instead of watching the game process, which would mean holding a handle on it.
+    /// </summary>
+    public Dictionary<string, DateTimeOffset> LootHistoryReadAt { get; set; } = new();
+
     public bool IsComplete => !string.IsNullOrWhiteSpace(GroupKey) && !string.IsNullOrWhiteSpace(SavedVariablesFilePath);
 }

@@ -73,7 +73,23 @@ public static class ArchiveStore
                 // file is that the game has already forgotten what is in it, so there is no second
                 // copy to fall back on — and until now every save replaced it in place. A bad merge,
                 // a bad shutdown, or a bug in a future build otherwise takes the only copy with it.
-                if (File.Exists(path)) File.Copy(path, path + BackupSuffix, overwrite: true);
+                //
+                // The backup is a courtesy on top of the save it must never block: a backup tool, an
+                // editor, or a virus scanner holding a handle on the .bak file would otherwise turn a
+                // save that would have succeeded into a thrown exception and a crash balloon, on the
+                // one file in this program that cannot be regenerated. Losing this generation's backup
+                // is a strictly smaller problem than losing the save itself, so a failure here does not
+                // abort the save.
+                try
+                {
+                    if (File.Exists(path)) File.Copy(path, path + BackupSuffix, overwrite: true);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
                 File.Move(tempPath, path, overwrite: true);
             }
             finally

@@ -191,6 +191,31 @@ public class ArchiveStoreTests : IDisposable
         Assert.Equal("award-2", Assert.Single(ArchiveStore.Load(Path_).Awards).Key);
     }
 
+    // Final review, Residual B: the .bak copy sat unguarded between the temp write and the rename.
+    // An external handle on the .bak path (a backup tool, an editor, a virus scanner) turned a save
+    // that would otherwise have succeeded into a thrown exception — on the one file that cannot be
+    // regenerated. The backup is a courtesy on top of the save; it must never be able to block it.
+    [Fact]
+    public void Save_WhenBackupFileIsLocked_StillSavesTheNewDataInstead()
+    {
+        var first = new ArchiveDocument();
+        first.Awards.Add(Award("award-1"));
+        ArchiveStore.Save(first, Path_);
+
+        var second = new ArchiveDocument();
+        second.Awards.Add(Award("award-2"));
+
+        // Opening with FileShare.None simulates another process (backup tool, AV scanner, editor)
+        // holding the .bak path exclusively, exactly as described in the review finding.
+        using (new FileStream(Path_ + ArchiveStore.BackupSuffix, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            var ex = Record.Exception(() => ArchiveStore.Save(second, Path_));
+            Assert.Null(ex);
+        }
+
+        Assert.Equal("award-2", Assert.Single(ArchiveStore.Load(Path_).Awards).Key);
+    }
+
     private static ArchivedAward Award(string id) => new()
     {
         Fields = new Dictionary<string, object?> { ["id"] = id, ["time"] = 1785356434d },

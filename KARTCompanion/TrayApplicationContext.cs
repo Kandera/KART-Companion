@@ -229,6 +229,9 @@ public sealed class TrayApplicationContext : ApplicationContext
         // skipped on every later tick until WoW rewrote it — and every award the cap evicted in
         // that window was gone for good.
         var pendingStamps = new Dictionary<string, DateTimeOffset>();
+        // Stamp of every file that failed to read this pass, so the notification decision below can
+        // tell "still unreadable, already told the user" from "unreadable again with new content".
+        var unreadableStamps = new Dictionary<string, DateTimeOffset>();
 
         foreach (var file in files)
         {
@@ -250,6 +253,7 @@ public sealed class TrayApplicationContext : ApplicationContext
                 // invisible, and the user is told "nothing new" by the one feature whose entire
                 // purpose is not losing data.
                 unreadable++;
+                unreadableStamps[file] = stamp;
                 continue;
             }
 
@@ -259,10 +263,31 @@ public sealed class TrayApplicationContext : ApplicationContext
             pendingStamps[file] = stamp;
         }
 
+        // A file the reader keeps rejecting fails on every tick forever, since its read stamp is
+        // never advanced (see above). Reporting that unconditionally on the automatic tick meant a
+        // balloon on every single sync interval, indefinitely — the same nag shape as M5. Report a
+        // given file's failure once, and again only once its content actually changes (new
+        // last-write stamp) and still fails; that is new information, not a repeat. Manual "Read
+        // loot history now" bypasses this and always reports, per Important 4.
+        var newlyUnreadable = false;
+        foreach (var (file, stamp) in unreadableStamps)
+        {
+            if (!_config.LootHistoryUnreadableNotifiedAt.TryGetValue(file, out var notifiedAt) || notifiedAt != stamp)
+            {
+                newlyUnreadable = true;
+                break;
+            }
+        }
+        var reportUnreadable = unreadable > 0 && (announceNothingNew || newlyUnreadable);
+
         if (pendingStamps.Count == 0)
         {
-            if (unreadable > 0)
+            if (reportUnreadable)
+            {
+                foreach (var (file, stamp) in unreadableStamps) _config.LootHistoryUnreadableNotifiedAt[file] = stamp;
+                ConfigStore.Save(_config);
                 Notify($"Could not read {unreadable} saved-variables file(s); nothing was archived. It will be retried.{accountsNote}");
+            }
             else if (announceNothingNew)
                 Notify("No new loot history to read." + accountsNote);
             return;
@@ -270,6 +295,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         ArchiveStore.Save(doc);
         foreach (var (file, stamp) in pendingStamps) _config.LootHistoryReadAt[file] = stamp;
+        foreach (var (file, stamp) in unreadableStamps) _config.LootHistoryUnreadableNotifiedAt[file] = stamp;
         ConfigStore.Save(_config);
         // Skipped and unreadable are surfaced alongside Added rather than left to a log: a silent
         // skip is exactly the shape of defect this project keeps finding. A user who updates the

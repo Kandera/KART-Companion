@@ -36,6 +36,15 @@ public sealed class CompanionConfig
     /// </summary>
     public Dictionary<string, DateTimeOffset> LootHistoryReadAt { get; set; } = new();
 
+    /// <summary>
+    /// Last-write time of each saved-variables file at the point we last told the user it could not
+    /// be read, keyed by full path. Lets the automatic tick tell a file that is still failing for the
+    /// same content (skip — already reported) from one that failed, then changed, then failed again
+    /// (report — that is new information). Manual "Read loot history now" ignores this and always
+    /// reports, per Important 4: a parse failure must never be silent.
+    /// </summary>
+    public Dictionary<string, DateTimeOffset> LootHistoryUnreadableNotifiedAt { get; set; } = new();
+
     public bool IsComplete => !string.IsNullOrWhiteSpace(GroupKey) && !string.IsNullOrWhiteSpace(SavedVariablesFilePath);
 
     /// <summary>
@@ -49,6 +58,7 @@ public sealed class CompanionConfig
     {
         var copy = (CompanionConfig)MemberwiseClone();
         copy.LootHistoryReadAt = new Dictionary<string, DateTimeOffset>(LootHistoryReadAt);
+        copy.LootHistoryUnreadableNotifiedAt = new Dictionary<string, DateTimeOffset>(LootHistoryUnreadableNotifiedAt);
         return copy;
     }
 }

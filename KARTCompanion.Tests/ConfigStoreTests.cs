@@ -60,6 +60,7 @@ public class ConfigStoreTests : IDisposable
             AutoSyncEnabled = false,
             LastSyncUtc = DateTimeOffset.FromUnixTimeSeconds(1785400000),
             LootHistoryReadAt = { [@"C:\wow\sv.lua"] = DateTimeOffset.FromUnixTimeSeconds(1785300000) },
+            LootHistoryUnreadableNotifiedAt = { [@"C:\wow\sv.lua"] = DateTimeOffset.FromUnixTimeSeconds(1785200000) },
         };
 
         var copy = original.Copy();

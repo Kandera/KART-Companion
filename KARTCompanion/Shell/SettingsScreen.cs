@@ -194,7 +194,13 @@ public sealed class SettingsScreen : IScreen
         statusCard.Controls.AddRange(new Control[] { _liveStatusDot, _statusLabel, _lastSyncLabel });
 
         // --- buttons ---
-        var buttonsTop = statusCardTop + statusCardHeight + 30;
+        // Pinned to the bottom of the shared frame, not trailing the status card. Settings has far
+        // less content than the history screen the shared height is set by, so following the card
+        // left the actions stranded mid-window above a stretch of empty background, which reads as
+        // an unfinished layout. Content at the top, actions at the bottom is what every settings
+        // dialog does, and it turns that same empty stretch into deliberate breathing room.
+        const int ButtonRowHeight = 30;
+        var buttonsTop = CompanionShell.ScreenSize.Height - 40 - ButtonRowHeight;
 
         _forceSyncButton = Theme.CreateButton("Force Sync");
         _forceSyncButton.Left = ContentLeft;

@@ -21,6 +21,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `ArchiveStore.Save` keeps one generation of the previous archive as `loot-history.json.bak`. An
   archive that cannot be read — or that this build does not understand — is moved aside and
   reported, never replaced.
+- **History screen** showing every award the archive holds, with filters for player, timeframe and
+  status, and search over item names and award reasons.
+- **Copy for WoWUtils** puts selected awards on the clipboard in RCLootCouncil format and records
+  that they were exported.
+- **Save a copy** of an export to a file without recording the export.
 
 ### Fixed
 - The Settings dialog rebuilt the config from a fixed list of fields on OK, dropping any field it

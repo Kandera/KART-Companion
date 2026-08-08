@@ -3,7 +3,7 @@ namespace KARTCompanion;
 /// <summary>
 /// Ensures only one async operation runs at a time and the "in progress" flag always resets —
 /// even if the operation throws. Shared by TrayApplicationContext's background sync timer and
-/// SettingsForm's Force Sync button, which previously each tracked their own `_syncing` bool
+/// SettingsScreen's Force Sync button, which previously each tracked their own `_syncing` bool
 /// without a try/finally, risking a permanently wedged guard if an exception ever landed between
 /// the flag being set and cleared.
 /// </summary>

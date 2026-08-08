@@ -1,17 +1,19 @@
 using KARTCompanion.Config;
 using KARTCompanion.SavedVariables;
 
-namespace KARTCompanion;
+namespace KARTCompanion.Shell;
 
-/// <summary>Minimal code-only settings dialog: group key, WoW install folder, sync interval,
-/// and a Force Sync button to test the config immediately without closing the dialog. Styled to
-/// match the addon's own branding (Theme.cs, colors lifted from KAimg.jpg).</summary>
-public sealed class SettingsForm : Form
+/// <summary>Settings screen: group key, WoW install folder, sync interval, and a Force Sync
+/// button to test the config immediately without leaving the screen. Layout is unchanged
+/// hand-placed pixel coordinates (see IScreen's doc comment for why that stays), styled to match
+/// the addon's own branding (Theme.cs, colors lifted from KAimg.jpg).</summary>
+public sealed class SettingsScreen : IScreen
 {
     private const int RailWidth = 64;
     private const int ContentLeft = RailWidth + 16;
     private const int ContentWidth = 396;
 
+    private readonly Panel _view;
     private readonly TextBox _groupKeyBox;
     private readonly TextBox _wowPathBox;
     private readonly TextBox _intervalBox;
@@ -20,87 +22,30 @@ public sealed class SettingsForm : Form
     private readonly Label _statusLabel;
     private readonly Button _forceSyncButton;
     private readonly Func<CompanionConfig, Task<SyncResult>> _runSync;
-    private readonly Panel _rail;
-    private readonly Panel _railStatusDot;
     private readonly Panel _liveStatusDot;
 
     private string? _resolvedSavedVariablesPath;
     private readonly SyncGate _syncGate = new();
 
+    public string Title => "Settings";
+    public Theme.IconGlyph Glyph => Theme.IconGlyph.Sliders;
+    public Control View => _view;
+
     public CompanionConfig Result { get; private set; }
 
-    public SettingsForm(CompanionConfig current, Func<CompanionConfig, Task<SyncResult>> runSync, Bitmap logo, Icon icon)
+    /// <summary>Raised once, when OK is pressed, carrying the config to persist. Cancel raises
+    /// nothing — Result stays whatever it was before this session (or whatever a successful
+    /// Force Sync already set it to), so a caller that persists only on this event never
+    /// persists a cancelled edit.</summary>
+    public event Action<CompanionConfig>? Saved;
+
+    public SettingsScreen(CompanionConfig current, Func<CompanionConfig, Task<SyncResult>> runSync)
     {
         Result = current;
         _runSync = runSync;
         _resolvedSavedVariablesPath = current.SavedVariablesFilePath;
 
-        Text = "KART Companion — Settings";
-        Icon = icon;
-        // No native title bar: the approved mockup is a borderless, rounded floating card with
-        // the logo/title drawn inside the body, not a light OS title bar sitting on top of a
-        // dark client area. FormBorderStyle.None removes that bar (and, with it, the window's
-        // only means of being dragged or closed by mouse — both are rebuilt below).
-        FormBorderStyle = FormBorderStyle.None;
-        MaximizeBox = false;
-        MinimizeBox = false;
-        StartPosition = FormStartPosition.CenterScreen;
-        Theme.StyleForm(this);
-
-        // Icon rail: a narrow navigation-style column separating the logo/status glance from the
-        // form fields, instead of the logo sitting inline with the title. Height is set to the
-        // dialog's final height once the rest of the layout is measured (see LayoutBelowStatusLabel).
-        _rail = new Panel { Left = 0, Top = 0, Width = RailWidth };
-        Theme.StylePanel(_rail, Theme.RailBackground);
-        Theme.MakeDragHandle(_rail, this);
-
-        var railDivider = new Panel { Left = RailWidth, Top = 0, Width = 1, BackColor = Theme.BorderStrong };
-
-        var closeGlyph = Theme.CreateCloseGlyph(Close);
-        closeGlyph.Left = ContentLeft + ContentWidth - closeGlyph.Width + 8;
-        closeGlyph.Top = 12;
-
-        var logoBox = new PictureBox
-        {
-            Image = logo,
-            SizeMode = PictureBoxSizeMode.Zoom,
-            Left = (RailWidth - 34) / 2,
-            Top = 20,
-            Width = 34,
-            Height = 34,
-        };
-
-        // Single active nav glyph under the logo — a "you are here" marker for the one screen
-        // this app has, with a thin accent bar to its left, not a second, unclickable nav item
-        // (that would imply a multi-page rail that doesn't exist).
-        var activeIcon = Theme.CreateIcon(Theme.IconGlyph.Sliders, Theme.Text, 16);
-        activeIcon.Left = (RailWidth - activeIcon.Width) / 2;
-        activeIcon.Top = 72;
-        var activeBar = new Panel { Left = activeIcon.Left - 12, Top = activeIcon.Top - 1, Width = 3, Height = 18, BackColor = Theme.Accent };
-
-        _railStatusDot = Theme.CreateStatusDot(Theme.TextDim);
-        _railStatusDot.Left = (RailWidth - _railStatusDot.Width) / 2;
-        _rail.Controls.AddRange(new Control[] { logoBox, activeBar, activeIcon, _railStatusDot });
-
-        // AutoSize (not a fixed Width spanning the whole content column) so the label's hit-test
-        // area hugs the short "KART Companion" text instead of silently overlapping the close
-        // glyph's hitbox further right, which would swallow its clicks.
-        var titleLabel = new Label
-        {
-            Text = "KART Companion",
-            Left = ContentLeft,
-            Top = 20,
-            AutoSize = true,
-            Font = new Font(Font.FontFamily, 14, FontStyle.Bold),
-        };
-        Theme.StyleLabel(titleLabel);
-
-        var subtitleLabel = new Label { Text = "Settings", Left = ContentLeft, Top = 47, AutoSize = true };
-        Theme.StyleLabel(subtitleLabel, dim: true);
-        Theme.MakeDragHandle(titleLabel, this);
-        Theme.MakeDragHandle(subtitleLabel, this);
-
-        var divider = new Panel { Left = ContentLeft, Top = 78, Width = ContentWidth, Height = 1, BackColor = Theme.AccentDim };
+        _view = new Panel();
 
         var groupKeyLabel = new Label { Text = "WoWUtils group key:", Left = ContentLeft, Top = 92, AutoSize = true };
         Theme.StyleLabel(groupKeyLabel, dim: true);
@@ -161,8 +106,7 @@ public sealed class SettingsForm : Form
         autoStartLabel.Left = _autoStartToggle.Right + 8;
         autoStartLabel.Top = _autoStartToggle.Top + (_autoStartToggle.Height - autoStartLabel.PreferredHeight) / 2;
 
-        // A compact "live" row (small dot + one status line) instead of a bare block of text —
-        // mirrors the rail's health dot right next to the text it explains.
+        // A compact "live" row (small dot + one status line) instead of a bare block of text.
         _liveStatusDot = Theme.CreateStatusDot(Theme.TextDim);
         _liveStatusDot.Left = ContentLeft;
         _liveStatusDot.Top = 372;
@@ -176,10 +120,10 @@ public sealed class SettingsForm : Form
             Width = ContentWidth - _liveStatusDot.Width - 8,
             AutoSize = true,
             MaximumSize = new System.Drawing.Size(ContentWidth - _liveStatusDot.Width - 8, 0),
-            Font = new Font(Font.FontFamily, 8f),
+            Font = new Font(_view.Font.FontFamily, 8f),
         };
         SetStatusText(BuildInitialStatusText(current), isError: false);
-        UpdateRailStatusDot(isError: false);
+        UpdateStatusDot(isError: false);
 
         _forceSyncButton = Theme.CreateButton("Force Sync");
         _forceSyncButton.Left = ContentLeft;
@@ -188,19 +132,28 @@ public sealed class SettingsForm : Form
 
         var cancelButton = Theme.CreateButton("Cancel");
         cancelButton.Width = 75;
-        cancelButton.DialogResult = DialogResult.Cancel;
+        // No native title bar means no DialogResult/ShowDialog() magic to close the window for
+        // us (that only auto-closes a modally-shown Form) — the shell now hosts more than one
+        // screen and stays open across them, so Close() is a request routed through whatever
+        // Form is currently hosting this screen's View, found dynamically, rather than a direct
+        // form close.
+        cancelButton.Click += (_, _) => _view.FindForm()?.Close();
 
         var okButton = Theme.CreateButton("OK", primary: true);
         okButton.Width = 75;
-        okButton.DialogResult = DialogResult.OK;
-        okButton.Click += (_, _) => OnOk();
+        okButton.Click += (_, _) => { OnOk(); _view.FindForm()?.Close(); };
 
-        AcceptButton = okButton;
-        CancelButton = cancelButton;
-
-        Controls.AddRange(new Control[]
+        _view.ParentChanged += (_, _) =>
         {
-            _rail, railDivider, titleLabel, subtitleLabel, closeGlyph, divider,
+            if (_view.FindForm() is { } form)
+            {
+                form.AcceptButton = okButton;
+                form.CancelButton = cancelButton;
+            }
+        };
+
+        _view.Controls.AddRange(new Control[]
+        {
             groupKeyLabel, groupKeyRow, wowPathLabel, wowPathRow,
             divider2,
             intervalLabel, intervalRow, _autoSyncToggle, autoSyncLabel,
@@ -209,10 +162,6 @@ public sealed class SettingsForm : Form
         });
 
         LayoutBelowStatusLabel();
-        // ApplyRoundedFormRegion re-subscribes to Resize internally, so this needs to run only
-        // once — later ClientSize changes from LayoutBelowStatusLabel already trigger Resize,
-        // which re-applies the rounded Region on its own.
-        Theme.ApplyRoundedFormRegion(this);
         _statusLabel.SizeChanged += (_, _) => LayoutBelowStatusLabel();
 
         void LayoutBelowStatusLabel()
@@ -223,24 +172,22 @@ public sealed class SettingsForm : Form
             _forceSyncButton.Left = ContentLeft;
             cancelButton.Left = ContentLeft + _forceSyncButton.Width + 8;
             okButton.Left = ContentLeft + ContentWidth - okButton.Width;
-            ClientSize = new System.Drawing.Size(ContentLeft + ContentWidth + 12, y + 40);
-            _rail.Height = ClientSize.Height;
-            railDivider.Height = ClientSize.Height;
-            _railStatusDot.Top = _rail.Height - 30;
+            _view.Size = new System.Drawing.Size(ContentLeft + ContentWidth + 12, y + 40);
         }
     }
 
-    // Mirrors the status text's color-coding on both the rail dot and the inline live-status
-    // dot, so sync health reads at a glance without having to read the status text: green once a
-    // SavedVariables file is resolved, red on error, dim gray while still unconfigured.
-    private void UpdateRailStatusDot(bool isError)
+    // Colors the inline live-status dot next to the status text: green once a SavedVariables
+    // file is resolved, red on error, dim gray while still unconfigured. This used to also color
+    // a second dot embedded in the shell's icon rail — dropped when Settings moved into the
+    // shell, since the shell owns the rail and knows nothing about a screen's sync state (see
+    // IScreen's doc comment on the frame/content split).
+    private void UpdateStatusDot(bool isError)
     {
         var color = isError
             ? Theme.Error
             : _resolvedSavedVariablesPath is not null
                 ? Theme.Success
                 : Theme.TextDim;
-        Theme.SetStatusDotColor(_railStatusDot, color);
         Theme.SetStatusDotColor(_liveStatusDot, color);
     }
 
@@ -289,14 +236,14 @@ public sealed class SettingsForm : Form
             _resolvedSavedVariablesPath = matches.OrderByDescending(File.GetLastWriteTimeUtc).First();
             SetStatusText("SavedVariables file: " + _resolvedSavedVariablesPath, isError: false);
         }
-        UpdateRailStatusDot(isError: _resolvedSavedVariablesPath is null);
+        UpdateStatusDot(isError: _resolvedSavedVariablesPath is null);
     }
 
-    // Copy the config this dialog was opened with and overwrite only the fields it actually edits.
-    // Building a fresh CompanionConfig out of named properties dropped everything the dialog does
-    // not name: LootHistoryReadAt already was one of those, so pressing OK — or forcing a sync from
-    // in here — persisted a config with empty loot-history read stamps. This shape cannot omit a
-    // field, so the next one anyone adds survives without touching this method.
+    // Copy the config this screen was opened with and overwrite only the fields it actually
+    // edits. Building a fresh CompanionConfig out of named properties dropped everything the
+    // dialog does not name: LootHistoryReadAt already was one of those, so pressing OK — or
+    // forcing a sync from in here — persisted a config with empty loot-history read stamps. This
+    // shape cannot omit a field, so the next one anyone adds survives without touching this method.
     private CompanionConfig BuildResultFromFields()
     {
         var config = Result.Copy();
@@ -314,6 +261,7 @@ public sealed class SettingsForm : Form
         // Applied only on OK (not live on toggle click) so Cancel really cancels. Written
         // unconditionally: re-enabling refreshes a stale exe path after the app was moved.
         AutoStart.SetEnabled(_autoStartToggle.IsOn);
+        Saved?.Invoke(Result);
     }
 
     private async Task OnForceSyncAsync()
@@ -342,12 +290,12 @@ public sealed class SettingsForm : Form
             Result = config;
             var skippedNote = result.SkippedCharacters > 0 ? $" ({result.SkippedCharacters} skipped)" : "";
             SetStatusText($"Synced {result.PlayerCount} players{skippedNote}. SavedVariables file: {config.SavedVariablesFilePath}", StatusKind.Success);
-            UpdateRailStatusDot(isError: false);
+            UpdateStatusDot(isError: false);
         }
         else
         {
             SetStatusText("Sync failed: " + (result.ErrorMessage ?? "unknown error"), isError: true);
-            UpdateRailStatusDot(isError: true);
+            UpdateStatusDot(isError: true);
         }
 
         _forceSyncButton.Enabled = true;

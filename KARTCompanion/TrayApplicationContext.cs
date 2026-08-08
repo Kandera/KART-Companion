@@ -1,6 +1,7 @@
 using KARTCompanion.Archive;
 using KARTCompanion.Config;
 using KARTCompanion.SavedVariables;
+using KARTCompanion.Shell;
 using KARTCompanion.Simulations;
 using KARTCompanion.WowUtils;
 
@@ -24,6 +25,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private CompanionConfig _config;
     private readonly SyncGate _syncGate = new();
     private bool _errorShown;
+    private CompanionShell? _shell;
 
     public TrayApplicationContext(HttpClient httpClient, IReadOnlyList<ISimReportFetcher> simFetchers)
     {
@@ -92,30 +94,43 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void OpenSettings()
     {
-        // Modal ShowDialog() still pumps timer ticks, so without this the background timer and
-        // the dialog's own Force Sync button could sync concurrently.
+        // Opening it twice must focus the existing window, not make a second — the shell is
+        // shown modeless (see below) so a re-entrant call here (e.g. the tray menu clicked again
+        // while it's already open) just brings the existing one forward.
+        if (_shell is not null)
+        {
+            _shell.Activate();
+            return;
+        }
+
+        // The shell still pumps timer ticks while open, so without this the background timer and
+        // the screen's own Force Sync button could sync concurrently. Previously undone in a
+        // finally around the (modal) ShowDialog() call; now undone from FormClosed instead, since
+        // the shell is modeless and this method returns immediately.
         _syncTimer.Stop();
-        try
+
+        var settingsScreen = new SettingsScreen(_config, RunSyncWithConfigAsync);
+        settingsScreen.Saved += config =>
         {
-            using var form = new SettingsForm(_config, RunSyncWithConfigAsync, _logo, _appIcon);
-            if (form.ShowDialog() == DialogResult.OK)
+            _config = config;
+            try
             {
-                _config = form.Result;
-                try
-                {
-                    ConfigStore.Save(_config);
-                }
-                catch (Exception ex)
-                {
-                    ShowUnexpectedError($"Failed to save settings: {ex.Message}");
-                }
-                UpdateTooltip();
+                ConfigStore.Save(_config);
             }
-        }
-        finally
+            catch (Exception ex)
+            {
+                ShowUnexpectedError($"Failed to save settings: {ex.Message}");
+            }
+            UpdateTooltip();
+        };
+
+        _shell = new CompanionShell(new IScreen[] { settingsScreen }, _logo, _appIcon);
+        _shell.FormClosed += (_, _) =>
         {
+            _shell = null;
             ApplyIntervalToTimer();
-        }
+        };
+        _shell.Show(0);
     }
 
     private void OpenWowFolder()

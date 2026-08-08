@@ -229,7 +229,7 @@ public static class Theme
 
     public static ToggleSwitch CreateToggleSwitch(bool initial) => new() { IsOn = initial };
 
-    public enum IconGlyph { Key, Folder, Sliders, Clock }
+    public enum IconGlyph { Key, Folder, Sliders, Clock, List }
 
     // Minimal monoline glyphs (1.6px stroke, rounded caps) drawn directly with GraphicsPath —
     // there's no icon font/SVG pipeline in this WinForms app, so these stand in for the field
@@ -271,6 +271,14 @@ public static class Theme
                     e.Graphics.DrawEllipse(pen, s * 0.08f, s * 0.08f, s * 0.84f, s * 0.84f);
                     e.Graphics.DrawLine(pen, s * 0.5f, s * 0.5f, s * 0.5f, s * 0.26f);
                     e.Graphics.DrawLine(pen, s * 0.5f, s * 0.5f, s * 0.68f, s * 0.6f);
+                    break;
+                case IconGlyph.List:
+                    using (var dot1 = new SolidBrush(color)) e.Graphics.FillEllipse(dot1, s * 0.06f, s * 0.14f, s * 0.14f, s * 0.14f);
+                    e.Graphics.DrawLine(pen, s * 0.34f, s * 0.21f, s * 0.94f, s * 0.21f);
+                    using (var dot2 = new SolidBrush(color)) e.Graphics.FillEllipse(dot2, s * 0.06f, s * 0.43f, s * 0.14f, s * 0.14f);
+                    e.Graphics.DrawLine(pen, s * 0.34f, s * 0.5f, s * 0.94f, s * 0.5f);
+                    using (var dot3 = new SolidBrush(color)) e.Graphics.FillEllipse(dot3, s * 0.06f, s * 0.72f, s * 0.14f, s * 0.14f);
+                    e.Graphics.DrawLine(pen, s * 0.34f, s * 0.79f, s * 0.94f, s * 0.79f);
                     break;
             }
         };

@@ -72,6 +72,12 @@ public sealed class CompanionShell : Form
             Width = 34,
             Height = 34,
         };
+        // Draggable, like the rail behind it. A child control eats the mouse before its parent ever
+        // sees it, so making only the rail a drag handle left the window movable in the gaps BETWEEN
+        // its children and nowhere else — you had to find the bare background to move the window.
+        // Every inert thing sitting on the rail gets the handle; only the nav icons, which have a
+        // click of their own, deliberately do not.
+        Theme.MakeDragHandle(logoBox, this);
         _rail.Controls.Add(logoBox);
 
         // Mirrors whichever screen is current's StatusColor — a health-at-a-glance dot the rail
@@ -79,6 +85,7 @@ public sealed class CompanionShell : Form
         // tracks the rail's own height (see SyncFrameToCurrentScreen), same as before.
         _railStatusDot = Theme.CreateStatusDot(Theme.TextDim);
         _railStatusDot.Left = (RailWidth - _railStatusDot.Width) / 2;
+        Theme.MakeDragHandle(_railStatusDot, this);
         _rail.Controls.Add(_railStatusDot);
 
         // AutoSize (not a fixed Width spanning the whole content column) so the label's hit-test
@@ -112,7 +119,11 @@ public sealed class CompanionShell : Form
             navIcon.Cursor = Cursors.Hand;
             navIcon.Click += (_, _) => SwitchTo(screen);
 
+            // The bar marking the current screen has no click of its own, so it is a drag handle too
+            // (see the logo above). Without it, the strip beside every nav icon was a dead spot the
+            // window could not be moved by.
             var accentBar = new Panel { Left = navIcon.Left - 12, Top = navIcon.Top - 1, Width = 3, Height = 18, BackColor = Theme.Accent };
+            Theme.MakeDragHandle(accentBar, this);
 
             _rail.Controls.Add(accentBar);
             _rail.Controls.Add(navIcon);

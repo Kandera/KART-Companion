@@ -34,7 +34,7 @@ public sealed class HistoryScreen : IScreen
 {
     private const int RailWidth = 64;
     private const int ContentLeft = RailWidth + 16;
-    private const int ContentWidth = 820;
+    private const int ContentWidth = 950;
 
     private readonly Func<ArchiveDocument> _loadArchive;
     private readonly Action<ArchiveDocument> _saveArchive;
@@ -149,7 +149,7 @@ public sealed class HistoryScreen : IScreen
         _listView.Columns.Add("Player", 110);
         _listView.Columns.Add("Item", 230);
         _listView.Columns.Add("Reason", 120);
-        _listView.Columns.Add("Difficulty", 100);
+        _listView.Columns.Add("Raid", 230);
         _listView.Columns.Add("Status", 130);
         _listView.RetrieveVirtualItem += (_, e) => e.Item = BuildRow(_filtered[e.ItemIndex]);
         _listView.DrawColumnHeader += DrawHeader;
@@ -418,7 +418,7 @@ public sealed class HistoryScreen : IScreen
             entry.Winner ?? "",
             ArchiveQuery.ItemDisplayName(entry.Item),
             entry.Reason ?? "",
-            DifficultyDisplay(entry),
+            HistoryExportPlanner.RaidDisplay(entry),
             StatusDisplay(status),
         });
     }
@@ -427,9 +427,6 @@ public sealed class HistoryScreen : IScreen
         unixSeconds == 0
             ? ""
             : DateTimeOffset.FromUnixTimeSeconds(unixSeconds).ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
-
-    private static string DifficultyDisplay(LootHistoryEntry e) =>
-        e.Difficulty ?? e.DifficultyId?.ToString(CultureInfo.InvariantCulture) ?? "";
 
     private static string StatusDisplay(AwardStatus status) => status switch
     {
@@ -796,9 +793,24 @@ public static class HistoryExportPlanner
         Held,
     }
 
+    /// <summary>The Raid column's text: the raid name and its difficulty, joined by an em dash when
+    /// both are present. <c>Instance</c> is absent on every award logged before the addon started
+    /// recording it, and will stay absent on those forever — that is not a defect (see
+    /// LootHistoryEntry's own remarks on absence), so those awards fall back to showing just the
+    /// difficulty, exactly what the old Difficulty column showed.</summary>
+    public static string RaidDisplay(LootHistoryEntry e)
+    {
+        var instance = e.Instance;
+        var difficulty = DifficultyNames.Canonical(e);
+
+        if (!string.IsNullOrEmpty(instance) && !string.IsNullOrEmpty(difficulty))
+            return $"{instance} — {difficulty}";
+        return !string.IsNullOrEmpty(instance) ? instance : difficulty;
+    }
+
     /// <summary>The field a list column shows, or null for a column that shows something the archive
     /// does not store as an editable field. Indices match the columns HistoryScreen adds, in order:
-    /// Time, Player, Item, Reason, Difficulty, Status.</summary>
+    /// Time, Player, Item, Reason, Raid, Status.</summary>
     public static string? FieldForColumn(int columnIndex) => columnIndex switch
     {
         1 => "winner",

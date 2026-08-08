@@ -37,6 +37,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the addon keeps its own record, and a correction there is still made in the game, by revoking and
   re-deciding.
 
+### Changed
+- **History list's Difficulty column is now Raid.** It shows the raid name and its difficulty
+  (`March on Quel'Danas — Mythic`) once the addon starts logging `instance`/`instanceID` on new
+  awards; existing awards, which never carry those fields, keep showing just the difficulty. The
+  difficulty name itself now comes from the same table the export uses, so the list can no longer
+  show a localized string (e.g. "Mythisch") or a raw difficultyID number that disagrees with what
+  gets exported.
+
 ### Fixed
 - The Settings dialog rebuilt the config from a fixed list of fields on OK, dropping any field it
   did not name.

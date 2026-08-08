@@ -1,4 +1,5 @@
 using KARTCompanion.Archive;
+using KARTCompanion.SavedVariables;
 using KARTCompanion.Shell;
 
 namespace KARTCompanion.Tests;
@@ -289,6 +290,47 @@ public class HistoryExportPlannerTests
         Assert.DoesNotContain("excluded", summary);
     }
 
+    private static LootHistoryEntry Entry(string? instance = null, long? difficultyId = null, string? difficulty = null)
+    {
+        var fields = new Dictionary<string, object?>();
+        if (instance != null) fields["instance"] = instance;
+        if (difficultyId != null) fields["difficultyID"] = (double)difficultyId.Value;
+        if (difficulty != null) fields["difficulty"] = difficulty;
+        return new LootHistoryEntry(fields);
+    }
+
+    [Fact]
+    public void RaidDisplay_BothPresent_JoinsInstanceAndDifficultyWithAnEmDash()
+    {
+        var entry = Entry(instance: "March on Quel'Danas", difficultyId: 16);
+
+        Assert.Equal("March on Quel'Danas — Mythic", HistoryExportPlanner.RaidDisplay(entry));
+    }
+
+    // Today's behaviour, and what every award archived before the addon started logging instance
+    // will keep showing forever — instance is absent on those, not present-and-empty.
+    [Fact]
+    public void RaidDisplay_InstanceAbsent_ShowsOnlyTheDifficulty()
+    {
+        var entry = Entry(instance: null, difficultyId: 16);
+
+        Assert.Equal("Mythic", HistoryExportPlanner.RaidDisplay(entry));
+    }
+
+    [Fact]
+    public void RaidDisplay_DifficultyUnknownButInstancePresent_ShowsOnlyTheInstance()
+    {
+        var entry = Entry(instance: "March on Quel'Danas");
+
+        Assert.Equal("March on Quel'Danas", HistoryExportPlanner.RaidDisplay(entry));
+    }
+
+    [Fact]
+    public void RaidDisplay_NeitherPresent_ReturnsEmptyString()
+    {
+        Assert.Equal("", HistoryExportPlanner.RaidDisplay(Entry()));
+    }
+
     [Fact]
     public void FieldForColumn_MapsOnlyThePlayerAndReasonColumns()
     {
@@ -296,7 +338,7 @@ public class HistoryExportPlannerTests
         Assert.Equal("winner", HistoryExportPlanner.FieldForColumn(1));
         Assert.Null(HistoryExportPlanner.FieldForColumn(2));   // Item
         Assert.Equal("reason", HistoryExportPlanner.FieldForColumn(3));
-        Assert.Null(HistoryExportPlanner.FieldForColumn(4));   // Difficulty
+        Assert.Null(HistoryExportPlanner.FieldForColumn(4));   // Raid
         Assert.Null(HistoryExportPlanner.FieldForColumn(5));   // Status
         Assert.Null(HistoryExportPlanner.FieldForColumn(99));
     }

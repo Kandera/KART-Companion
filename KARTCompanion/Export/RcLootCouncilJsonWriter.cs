@@ -28,30 +28,6 @@ namespace KARTCompanion.Export;
 /// </summary>
 public static class RcLootCouncilJsonWriter
 {
-    // Canonical English difficulty names, mirroring LootHistory.lua's DIFFICULTY_EN. Keyed by
-    // Blizzard's difficultyID; entries logged before that field existed fall back to the stored
-    // (possibly localized) difficulty string, exactly as the addon's LH.DifficultyExport does.
-    private static readonly Dictionary<long, string> DifficultyEn = new()
-    {
-        [1] = "Normal",
-        [2] = "Heroic",
-        [3] = "10 Player",
-        [4] = "25 Player",
-        [5] = "10 Player (Heroic)",
-        [6] = "25 Player (Heroic)",
-        [7] = "LFR",
-        [8] = "Mythic Keystone",
-        [9] = "40 Player",
-        [14] = "Normal",
-        [15] = "Heroic",
-        [16] = "Mythic",
-        [17] = "LFR",
-        [23] = "Mythic",
-        [24] = "Timewalking",
-        [33] = "Timewalking",
-        [208] = "Delve",
-    };
-
     // |H(item:...)|h — the item string exactly as the client wrote it, matched by delimiter so no
     // assumption is made about which separators a given client build uses inside it.
     private static readonly Regex ItemStringPattern = new(@"\|H(item:[^|]+)\|h", RegexOptions.Compiled);
@@ -92,7 +68,9 @@ public static class RcLootCouncilJsonWriter
             JsonString("response", e.Reason ?? ""),
             JsonNumber("votes", 0),
             JsonString("class", e.Class ?? ""),
-            JsonString("instance", DifficultyExport(e)),
+            // "instance" carries the difficulty here, not the instance name — that is the addon's
+            // own field layout (LH.BuildRCLootCouncilJSON), matched deliberately, not a bug to fix.
+            JsonString("instance", DifficultyNames.Canonical(e)),
             JsonString("boss", ""),
             JsonString("gear1", ""),
             JsonString("gear2", ""),
@@ -109,9 +87,6 @@ public static class RcLootCouncilJsonWriter
         };
         return "{" + string.Join(",", fields) + "}";
     }
-
-    private static string DifficultyExport(LootHistoryEntry e) =>
-        (e.DifficultyId is { } id && DifficultyEn.TryGetValue(id, out var name)) ? name : (e.Difficulty ?? "");
 
     private static string GetItemString(string? link)
     {

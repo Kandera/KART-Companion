@@ -29,6 +29,8 @@ public sealed class LootHistoryEntry
     public long? RollId => Num("rollID");
     public string? Difficulty => Get<string>("difficulty");
     public long? DifficultyId => Num("difficultyID");
+    public string? Instance => Get<string>("instance");
+    public long? InstanceId => Num("instanceID");
     public string? Id => Get<string>("id");
     public long? Epoch => Num("epoch");
     public bool? Exported => Fields.TryGetValue("exported", out var v) && v is bool b ? b : null;

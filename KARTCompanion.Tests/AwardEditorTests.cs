@@ -126,4 +126,103 @@ public class AwardEditorTests
     {
         Assert.Equal(new[] { "winner", "reason" }, AwardEditor.EditableFields);
     }
+
+    private static ArchiveDocument DocumentWith(params ArchivedAward[] awards)
+    {
+        var doc = new ArchiveDocument();
+        doc.Awards.AddRange(awards);
+        return doc;
+    }
+
+    private static ArchivedAward AwardWithId(string id, string winner = "Bramblewick") =>
+        new() { Fields = new Dictionary<string, object?> { ["id"] = id, ["winner"] = winner, ["reason"] = "BIS" } };
+
+    [Fact]
+    public void ApplyAndSave_AppliesToTheFreshlyLoadedDocumentAndSavesIt()
+    {
+        var fresh = DocumentWith(AwardWithId("a1"));
+        ArchiveDocument? saved = null;
+
+        var outcome = AwardEditor.ApplyAndSave(
+            "a1",
+            new Dictionary<string, string> { ["winner"] = "Thornfell", ["reason"] = "Offspec" },
+            excludedFromExport: false,
+            () => fresh,
+            doc => saved = doc);
+
+        Assert.Same(fresh, outcome.Document);
+        Assert.Same(fresh, saved);
+        Assert.Equal("Thornfell", outcome.Award.EffectiveFields["winner"]);
+        Assert.Equal("Offspec", outcome.Award.EffectiveFields["reason"]);
+    }
+
+    // The caller holds a display snapshot that can be minutes old, and a merge may have added awards
+    // to the file since. Editing the caller's object and saving the caller's document would drop them.
+    [Fact]
+    public void ApplyAndSave_DoesNotLoseAwardsAddedSinceTheCallersSnapshot()
+    {
+        var stale = AwardWithId("a1");
+        var fresh = DocumentWith(AwardWithId("a1"), AwardWithId("a2", "Marrowlight"));
+        ArchiveDocument? saved = null;
+
+        AwardEditor.ApplyAndSave(
+            stale.Key,
+            new Dictionary<string, string> { ["winner"] = "Thornfell" },
+            excludedFromExport: false,
+            () => fresh,
+            doc => saved = doc);
+
+        Assert.Equal(2, saved!.Awards.Count);
+        Assert.Equal("Thornfell", saved.Awards.Single(a => a.Key == "a1").EffectiveFields["winner"]);
+        // The caller's own object is not what was edited.
+        Assert.False(AwardEditor.IsEdited(stale));
+    }
+
+    [Fact]
+    public void ApplyAndSave_SetsAndClearsTheExclusion()
+    {
+        var fresh = DocumentWith(AwardWithId("a1"));
+
+        var excluded = AwardEditor.ApplyAndSave(
+            "a1", new Dictionary<string, string>(), excludedFromExport: true, () => fresh, _ => { });
+        Assert.True(excluded.Award.ExcludedFromExport);
+
+        var included = AwardEditor.ApplyAndSave(
+            "a1", new Dictionary<string, string>(), excludedFromExport: false, () => fresh, _ => { });
+        Assert.False(included.Award.ExcludedFromExport);
+    }
+
+    // If the award is not there, the archive is not the one the caller was looking at — the likeliest
+    // cause is that it was quarantined and Load answered a fresh empty document. Saving then would
+    // write an empty archive over the only copy of history the game has already forgotten.
+    [Fact]
+    public void ApplyAndSave_UnknownKey_ThrowsAndSavesNothing()
+    {
+        var saveCalled = false;
+
+        Assert.Throws<InvalidOperationException>(() => AwardEditor.ApplyAndSave(
+            "missing",
+            new Dictionary<string, string> { ["winner"] = "Thornfell" },
+            excludedFromExport: false,
+            () => new ArchiveDocument(),
+            _ => saveCalled = true));
+
+        Assert.False(saveCalled);
+    }
+
+    [Fact]
+    public void ApplyAndSave_RefusedField_ThrowsAndSavesNothing()
+    {
+        var fresh = DocumentWith(AwardWithId("a1"));
+        var saveCalled = false;
+
+        Assert.Throws<ArgumentException>(() => AwardEditor.ApplyAndSave(
+            "a1",
+            new Dictionary<string, string> { ["id"] = "a2" },
+            excludedFromExport: false,
+            () => fresh,
+            _ => saveCalled = true));
+
+        Assert.False(saveCalled);
+    }
 }

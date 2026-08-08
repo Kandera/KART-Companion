@@ -60,4 +60,46 @@ public static class AwardEditor
     public static bool IsEdited(ArchivedAward award) => award.Edits.Count > 0;
 
     public static bool IsFieldEdited(ArchivedAward award, string field) => award.Edits.ContainsKey(field);
+
+    /// <summary>What an edit did: the document it was applied in, and the award as it now stands.</summary>
+    public sealed record EditOutcome(ArchiveDocument Document, ArchivedAward Award);
+
+    /// <summary>
+    /// The whole edit path in one tested place: load the archive fresh, apply the corrections to the
+    /// award in THAT document, save it.
+    ///
+    /// The reload is not a nicety. The window is modeless, and while it sits open the tray's "Read
+    /// loot history now" and the background sync merge into their own document and save it. Editing
+    /// the object the window is holding and saving the window's document would silently drop every
+    /// award that arrived in between — from the one file in this program that cannot be regenerated.
+    /// HistoryExportPlanner.ExportAndStamp solves the same problem the same way, and for the same
+    /// reason.
+    ///
+    /// Nothing is saved unless every correction was accepted: a refused field throws before save is
+    /// ever called, and the freshly-loaded document is discarded with the exception. There is nothing
+    /// to roll back, because nothing durable and nothing the caller already held was touched.
+    /// </summary>
+    /// <param name="key">The award's id. A key rather than the object, because the caller's object
+    /// belongs to a snapshot that may already be out of date.</param>
+    /// <param name="edits">The complete corrected value for each field being set. A value equal to
+    /// what the addon wrote clears that correction — see <see cref="Set"/>.</param>
+    public static EditOutcome ApplyAndSave(
+        string key,
+        IReadOnlyDictionary<string, string> edits,
+        bool excludedFromExport,
+        Func<ArchiveDocument> load,
+        Action<ArchiveDocument> save)
+    {
+        var fresh = load();
+
+        var award = fresh.Awards.FirstOrDefault(a => a.Key == key)
+            ?? throw new InvalidOperationException(
+                $"Award {key} is no longer in the archive, so nothing was saved.");
+
+        foreach (var (field, value) in edits) Set(award, field, value);
+        award.ExcludedFromExport = excludedFromExport;
+
+        save(fresh);
+        return new EditOutcome(fresh, award);
+    }
 }

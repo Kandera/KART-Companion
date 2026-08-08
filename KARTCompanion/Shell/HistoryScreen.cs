@@ -330,7 +330,7 @@ public sealed class HistoryScreen : IScreen
         _playerCombo.Items.Clear();
         _playerCombo.Items.Add("All players");
         var players = _awards
-            .Select(a => new LootHistoryEntry(a.Fields).Winner)
+            .Select(a => new LootHistoryEntry(a.EffectiveFields).Winner)
             .Where(w => !string.IsNullOrEmpty(w))
             .Distinct()
             .OrderBy(w => w, StringComparer.OrdinalIgnoreCase);
@@ -398,7 +398,7 @@ public sealed class HistoryScreen : IScreen
 
     private ListViewItem BuildRow(ArchivedAward award)
     {
-        var entry = new LootHistoryEntry(award.Fields);
+        var entry = new LootHistoryEntry(award.EffectiveFields);
         var status = ArchiveQuery.StatusOf(award);
         return new ListViewItem(new[]
         {
@@ -426,6 +426,7 @@ public sealed class HistoryScreen : IScreen
         AwardStatus.ExportedByCompanion => "exported (companion)",
         AwardStatus.ExportedByBoth => "exported (both)",
         AwardStatus.Withdrawn => "withdrawn",
+        AwardStatus.Excluded => "excluded",
         _ => status.ToString(),
     };
 
@@ -525,7 +526,7 @@ public sealed class HistoryScreen : IScreen
                 {
                     // Clipboard.SetText throws on an empty string, but ExportAndStamp does not call
                     // this at all when there is nothing to send.
-                    Clipboard.SetText(RcLootCouncilJsonWriter.Write(awards.Select(a => new LootHistoryEntry(a.Fields))));
+                    Clipboard.SetText(RcLootCouncilJsonWriter.Write(awards.Select(a => new LootHistoryEntry(a.EffectiveFields))));
                     delivered = true;
                 },
                 _saveArchive);
@@ -549,7 +550,7 @@ public sealed class HistoryScreen : IScreen
 
         if (outcome.Exported.Count == 0)
         {
-            SetResult("Nothing was exported — every selected award has since been withdrawn.", ResultKind.Neutral);
+            SetResult("Nothing was exported — every selected award is withdrawn or excluded.", ResultKind.Neutral);
             return;
         }
 
@@ -582,7 +583,7 @@ public sealed class HistoryScreen : IScreen
 
         if (toExport.Count == 0)
         {
-            SetResult("Nothing was saved — every selected award has since been withdrawn.", ResultKind.Neutral);
+            SetResult("Nothing was saved — every selected award is withdrawn or excluded.", ResultKind.Neutral);
             return;
         }
 
@@ -593,12 +594,12 @@ public sealed class HistoryScreen : IScreen
         };
         if (dialog.ShowDialog() != DialogResult.OK) return;
 
-        var json = RcLootCouncilJsonWriter.Write(toExport.Select(a => new LootHistoryEntry(a.Fields)));
+        var json = RcLootCouncilJsonWriter.Write(toExport.Select(a => new LootHistoryEntry(a.EffectiveFields)));
         try
         {
             File.WriteAllText(dialog.FileName, json);
             var leftOut = _listView.SelectedIndices.Count - toExport.Count;
-            var note = leftOut > 0 ? $" {leftOut} withdrawn award(s) were left out." : "";
+            var note = leftOut > 0 ? $" {leftOut} withdrawn or excluded award(s) were left out." : "";
             SetResult($"Saved {toExport.Count} award(s) to {dialog.FileName}.{note}", ResultKind.Success);
         }
         catch (Exception ex)
@@ -666,18 +667,25 @@ public static class HistoryExportPlanner
     /// and says so); Ctrl+A is how everything shown is taken. This is also what the design asked for:
     /// "What gets exported is what is selected."</summary>
     public static IReadOnlyList<ArchivedAward> AwardsToExport(IReadOnlyList<ArchivedAward> selected) =>
-        selected.Where(a => !a.Withdrawn).ToList();
+        selected.Where(a => !a.Withdrawn && !a.ExcludedFromExport).ToList();
 
     /// <summary>True when the selection holds an award the Companion has marked exported but the
     /// addon has not — the one case exporting again from the addon would resend, since WoWUtils does
     /// not dedup and the Companion cannot set the addon's own mark.
+    ///
+    /// Asked of the two marks directly, NOT of ArchiveQuery.StatusOf. StatusOf answers "what is this
+    /// award now", where Withdrawn and Excluded both outrank the export marks — so asking it here meant
+    /// a withdrawn or excluded award could never light this notice, even though the addon still has no
+    /// idea the Companion already sent it. Over-warning about an award that turns out to stay withdrawn
+    /// is the safe direction; going quiet about one is not.
     ///
     /// Asked about the user's actual selection, never about "everything shown": Companion-exported
     /// awards stay in the archive forever, so a fallback selection meant this was lit from the second
     /// time the window was ever opened, permanently. A warning that is always on is furniture, and
     /// this is the only mitigation the design has for the two-exporters problem.</summary>
     public static bool ContainsCompanionOnlyExport(IReadOnlyList<ArchivedAward> selected) =>
-        selected.Any(a => ArchiveQuery.StatusOf(a) == AwardStatus.ExportedByCompanion);
+        selected.Any(a => a.ExportedByCompanionAt != null
+            && !(a.Fields.TryGetValue("exported", out var v) && v is true));
 
     /// <summary>The footer's count line. Counts rows shown as rows shown — a withdrawn award among
     /// them is still a row on screen, and reporting four rows as "3 shown" (the exportable count
@@ -692,10 +700,72 @@ public static class HistoryExportPlanner
         }
 
         var exportable = AwardsToExport(selected).Count;
-        var withdrawn = selected.Count - exportable;
-        return withdrawn == 0
+        var withdrawn = selected.Count(a => a.Withdrawn);
+        var excluded = selected.Count(a => !a.Withdrawn && a.ExcludedFromExport);
+
+        var held = new List<string>();
+        if (withdrawn > 0) held.Add($"{withdrawn} withdrawn");
+        if (excluded > 0) held.Add($"{excluded} excluded");
+
+        return held.Count == 0
             ? $"{selected.Count} of {shownCount} shown award(s) selected."
-            : $"{selected.Count} of {shownCount} shown award(s) selected — {exportable} will be exported, {withdrawn} withdrawn.";
+            : $"{selected.Count} of {shownCount} shown award(s) selected — {exportable} will be exported, {string.Join(", ", held)}.";
+    }
+
+    /// <summary>How a cell should be set apart from an ordinary one. An enum rather than a Color so
+    /// the decision can be tested without constructing a Form — HistoryScreen maps these to theme
+    /// colors and nothing else.</summary>
+    public enum RowEmphasis
+    {
+        Normal,
+
+        /// <summary>The maintainer corrected this exact field. Marked at the cell, not the row: once
+        /// the Companion is what feeds WoWUtils, a corrected value is an ASSERTION by the maintainer
+        /// rather than a record from the game, and the two must not look alike — six months on, nobody
+        /// remembers which is which.</summary>
+        Edited,
+
+        /// <summary>This award will not be exported at all — withdrawn by the game, or excluded by the
+        /// maintainer. The whole row, every column.</summary>
+        Held,
+    }
+
+    /// <summary>The field a list column shows, or null for a column that shows something the archive
+    /// does not store as an editable field. Indices match the columns HistoryScreen adds, in order:
+    /// Time, Player, Item, Reason, Difficulty, Status.</summary>
+    public static string? FieldForColumn(int columnIndex) => columnIndex switch
+    {
+        1 => "winner",
+        3 => "reason",
+        _ => null,
+    };
+
+    public static RowEmphasis EmphasisFor(ArchivedAward award, int columnIndex)
+    {
+        if (award.Withdrawn || award.ExcludedFromExport) return RowEmphasis.Held;
+
+        var field = FieldForColumn(columnIndex);
+        return field != null && AwardEditor.IsFieldEdited(award, field)
+            ? RowEmphasis.Edited
+            : RowEmphasis.Normal;
+    }
+
+    /// <summary>The line shown after an edit is saved. Says what now stands, not what changed: the
+    /// dialog sets every editable field at once, so "corrected the player" is only true of the
+    /// resulting state.</summary>
+    public static string EditSummary(ArchivedAward award)
+    {
+        var corrected = new List<string>();
+        if (AwardEditor.IsFieldEdited(award, "winner")) corrected.Add("player");
+        if (AwardEditor.IsFieldEdited(award, "reason")) corrected.Add("reason");
+
+        var head = corrected.Count == 0
+            ? "Saved. No corrections are in place for this award"
+            : $"Saved. Corrected {string.Join(" and ", corrected)}";
+
+        return award.ExcludedFromExport
+            ? head + ", and it is excluded from every export."
+            : head + ".";
     }
 
     /// <summary>The warning for a date field that does not parse. Unparsable text is treated as no
@@ -757,7 +827,7 @@ public static class HistoryExportPlanner
         ArchiveDocument document, IReadOnlyCollection<string> selectedKeys)
     {
         var keys = new HashSet<string>(selectedKeys);
-        return document.Awards.Where(a => keys.Contains(a.Key) && !a.Withdrawn).ToList();
+        return document.Awards.Where(a => keys.Contains(a.Key) && !a.Withdrawn && !a.ExcludedFromExport).ToList();
     }
 
     /// <summary>The trailing note for the post-Copy result line, when what actually went disagrees
@@ -774,7 +844,7 @@ public static class HistoryExportPlanner
     public static string ExportDiscrepancyNote(int selectedCount, int shownExportableCount, int actuallyExportedCount)
     {
         var leftOut = selectedCount - actuallyExportedCount;
-        if (leftOut > 0) return $" {leftOut} withdrawn award(s) were left out.";
+        if (leftOut > 0) return $" {leftOut} withdrawn or excluded award(s) were left out.";
 
         var extra = actuallyExportedCount - shownExportableCount;
         if (extra > 0) return $" {extra} more award(s) were exported than the list showed — a withdrawal was reversed since this list was drawn.";

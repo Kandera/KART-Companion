@@ -6,7 +6,8 @@ public class ArchiveQueryTests
 {
     private static ArchivedAward Award(
         string id, long time, string winner, string item, string reason,
-        bool addonExported = false, bool withdrawn = false, DateTimeOffset? companionExported = null)
+        bool addonExported = false, bool withdrawn = false, DateTimeOffset? companionExported = null,
+        bool excluded = false, string? editedWinner = null)
     {
         var fields = new Dictionary<string, object?>
         {
@@ -18,12 +19,15 @@ public class ArchiveQueryTests
         };
         if (addonExported) fields["exported"] = true;
 
-        return new ArchivedAward
+        var award = new ArchivedAward
         {
             Fields = fields,
             Withdrawn = withdrawn,
             ExportedByCompanionAt = companionExported,
+            ExcludedFromExport = excluded,
         };
+        if (editedWinner != null) AwardEditor.Set(award, "winner", editedWinner);
+        return award;
     }
 
     // "Still open" means NEITHER exporter has taken it. The addon's mark reaches the archive on the
@@ -48,6 +52,42 @@ public class ArchiveQueryTests
         var award = Award("a", 1, "A", "i", "BIS", addonExported: true, withdrawn: true);
 
         Assert.Equal(AwardStatus.Withdrawn, ArchiveQuery.StatusOf(award));
+    }
+
+    [Fact]
+    public void StatusOf_ExcludedOutranksEveryExportMarkButNotWithdrawn()
+    {
+        var excluded = Award("a1", 100, "Bramblewick", "[Blade]", "BIS", excluded: true);
+        var excludedAndExported = Award("a2", 100, "Bramblewick", "[Blade]", "BIS",
+            excluded: true, addonExported: true);
+        var withdrawnAndExcluded = Award("a3", 100, "Bramblewick", "[Blade]", "BIS",
+            excluded: true, withdrawn: true);
+
+        Assert.Equal(AwardStatus.Excluded, ArchiveQuery.StatusOf(excluded));
+        Assert.Equal(AwardStatus.Excluded, ArchiveQuery.StatusOf(excludedAndExported));
+        // Withdrawn stays the strongest fact: the game itself dropped the row.
+        Assert.Equal(AwardStatus.Withdrawn, ArchiveQuery.StatusOf(withdrawnAndExcluded));
+    }
+
+    [Fact]
+    public void Filter_PlayerMatchesTheCorrectedWinnerNotTheAddonsOwn()
+    {
+        var award = Award("a1", 100, "Bramblewick", "[Blade]", "BIS", editedWinner: "Thornfell");
+        var awards = new[] { award };
+
+        Assert.Single(ArchiveQuery.Filter(awards, "Thornfell", null, null, null, null));
+        Assert.Empty(ArchiveQuery.Filter(awards, "Bramblewick", null, null, null, null));
+    }
+
+    [Fact]
+    public void Filter_SearchMatchesACorrectedReason()
+    {
+        var award = Award("a1", 100, "Bramblewick", "[Blade]", "BIS");
+        AwardEditor.Set(award, "reason", "Offspec");
+        var awards = new[] { award };
+
+        Assert.Single(ArchiveQuery.Filter(awards, null, null, null, null, "Offspec"));
+        Assert.Empty(ArchiveQuery.Filter(awards, null, null, null, null, "BIS"));
     }
 
     [Fact]

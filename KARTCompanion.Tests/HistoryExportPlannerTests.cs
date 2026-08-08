@@ -6,7 +6,8 @@ namespace KARTCompanion.Tests;
 public class HistoryExportPlannerTests
 {
     private static ArchivedAward Award(
-        string id, bool withdrawn = false, bool addonExported = false, DateTimeOffset? companionExported = null)
+        string id, bool withdrawn = false, bool addonExported = false, DateTimeOffset? companionExported = null,
+        bool excluded = false)
     {
         var fields = new Dictionary<string, object?>
         {
@@ -23,6 +24,7 @@ public class HistoryExportPlannerTests
             Fields = fields,
             Withdrawn = withdrawn,
             ExportedByCompanionAt = companionExported,
+            ExcludedFromExport = excluded,
         };
     }
 
@@ -68,6 +70,29 @@ public class HistoryExportPlannerTests
     }
 
     [Fact]
+    public void AwardsToExport_DropsExcludedAwards()
+    {
+        var open = Award("open");
+        var excluded = Award("excluded", excluded: true);
+
+        var result = HistoryExportPlanner.AwardsToExport(new[] { open, excluded });
+
+        Assert.Equal(new[] { "open" }, result.Select(a => a.Key));
+    }
+
+    [Fact]
+    public void ExportableFrom_DropsExcludedAwardsEvenWhenExplicitlySelected()
+    {
+        var doc = new ArchiveDocument();
+        doc.Awards.Add(Award("open"));
+        doc.Awards.Add(Award("excluded", excluded: true));
+
+        var result = HistoryExportPlanner.ExportableFrom(doc, new[] { "open", "excluded" });
+
+        Assert.Equal(new[] { "open" }, result.Select(a => a.Key));
+    }
+
+    [Fact]
     public void ContainsCompanionOnlyExport_TrueOnlyForTheCompanionOnlyStatus()
     {
         var open = Award("open");
@@ -80,9 +105,15 @@ public class HistoryExportPlannerTests
         Assert.False(HistoryExportPlanner.ContainsCompanionOnlyExport(new[] { addonOnly }));
         Assert.True(HistoryExportPlanner.ContainsCompanionOnlyExport(new[] { companionOnly }));
         Assert.False(HistoryExportPlanner.ContainsCompanionOnlyExport(new[] { both }));
-        // Withdrawn outranks every export mark (see ArchiveQuery.StatusOf) — a withdrawn award is
-        // never reported as "Companion only", even if the mark is still sitting in its Fields.
-        Assert.False(HistoryExportPlanner.ContainsCompanionOnlyExport(new[] { withdrawnCompanion }));
+        // Asked of the marks themselves, not of StatusOf. StatusOf answers "what is this award now",
+        // and Withdrawn and Excluded both outrank the export marks there — so routing this through it
+        // meant a withdrawn or excluded award never lit the notice, even though the addon still has no
+        // idea the Companion sent it and its own export button will send it again. Over-warning for an
+        // award that turns out to stay withdrawn is the safe direction; going quiet is not.
+        Assert.True(HistoryExportPlanner.ContainsCompanionOnlyExport(new[] { withdrawnCompanion }));
+
+        var excludedCompanion = Award("excluded", excluded: true, companionExported: DateTimeOffset.UnixEpoch);
+        Assert.True(HistoryExportPlanner.ContainsCompanionOnlyExport(new[] { excludedCompanion }));
     }
 
     [Fact]
@@ -229,6 +260,84 @@ public class HistoryExportPlannerTests
     {
         Assert.Equal("No awards shown — nothing to select.",
             HistoryExportPlanner.SelectionSummary(shownCount: 0, Array.Empty<ArchivedAward>()));
+    }
+
+    [Fact]
+    public void SelectionSummary_NamesWithdrawnAndExcludedSeparately()
+    {
+        var selected = new[] { Award("a"), Award("b", withdrawn: true), Award("c", excluded: true) };
+
+        var summary = HistoryExportPlanner.SelectionSummary(10, selected);
+
+        Assert.Contains("1 will be exported", summary);
+        Assert.Contains("1 withdrawn", summary);
+        Assert.Contains("1 excluded", summary);
+    }
+
+    // An award can be both. Counting it in both buckets makes the numbers not add up against the
+    // selection count, which reads as a bug in the window rather than as two overlapping labels.
+    // Withdrawn wins, because that is what StatusOf calls it and what the Status column shows.
+    [Fact]
+    public void SelectionSummary_AnAwardBothWithdrawnAndExcludedIsCountedOnce()
+    {
+        var selected = new[] { Award("a"), Award("b", withdrawn: true, excluded: true) };
+
+        var summary = HistoryExportPlanner.SelectionSummary(10, selected);
+
+        Assert.Contains("1 will be exported", summary);
+        Assert.Contains("1 withdrawn", summary);
+        Assert.DoesNotContain("excluded", summary);
+    }
+
+    [Fact]
+    public void FieldForColumn_MapsOnlyThePlayerAndReasonColumns()
+    {
+        Assert.Null(HistoryExportPlanner.FieldForColumn(0));   // Time
+        Assert.Equal("winner", HistoryExportPlanner.FieldForColumn(1));
+        Assert.Null(HistoryExportPlanner.FieldForColumn(2));   // Item
+        Assert.Equal("reason", HistoryExportPlanner.FieldForColumn(3));
+        Assert.Null(HistoryExportPlanner.FieldForColumn(4));   // Difficulty
+        Assert.Null(HistoryExportPlanner.FieldForColumn(5));   // Status
+        Assert.Null(HistoryExportPlanner.FieldForColumn(99));
+    }
+
+    [Fact]
+    public void EmphasisFor_MarksTheEditedCellOnly()
+    {
+        var award = Award("a");
+        AwardEditor.Set(award, "winner", "Thornfell");
+
+        Assert.Equal(HistoryExportPlanner.RowEmphasis.Edited, HistoryExportPlanner.EmphasisFor(award, 1));
+        Assert.Equal(HistoryExportPlanner.RowEmphasis.Normal, HistoryExportPlanner.EmphasisFor(award, 3));
+        Assert.Equal(HistoryExportPlanner.RowEmphasis.Normal, HistoryExportPlanner.EmphasisFor(award, 0));
+    }
+
+    [Fact]
+    public void EmphasisFor_AwardsThatCannotBeExportedAreHeldBackWholeRow()
+    {
+        var withdrawn = Award("w", withdrawn: true);
+        var excluded = Award("e", excluded: true);
+
+        Assert.Equal(HistoryExportPlanner.RowEmphasis.Held, HistoryExportPlanner.EmphasisFor(withdrawn, 1));
+        Assert.Equal(HistoryExportPlanner.RowEmphasis.Held, HistoryExportPlanner.EmphasisFor(excluded, 3));
+    }
+
+    [Fact]
+    public void EditSummary_NamesWhatWasCorrectedAndWhetherItIsExcluded()
+    {
+        var untouched = Award("a");
+        Assert.Contains("No corrections", HistoryExportPlanner.EditSummary(untouched));
+
+        var corrected = Award("b");
+        AwardEditor.Set(corrected, "winner", "Thornfell");
+        AwardEditor.Set(corrected, "reason", "Offspec");
+        var summary = HistoryExportPlanner.EditSummary(corrected);
+        Assert.Contains("player", summary);
+        Assert.Contains("reason", summary);
+        Assert.DoesNotContain("excluded", summary);
+
+        var held = Award("c", excluded: true);
+        Assert.Contains("excluded", HistoryExportPlanner.EditSummary(held));
     }
 
     // The headline rule Copy for WoWUtils depends on: it must reload before stamping, not write back
@@ -411,7 +520,7 @@ public class HistoryExportPlannerTests
         var note = HistoryExportPlanner.ExportDiscrepancyNote(
             selectedCount: 3, shownExportableCount: 3, actuallyExportedCount: 2);
 
-        Assert.Equal(" 1 withdrawn award(s) were left out.", note);
+        Assert.Equal(" 1 withdrawn or excluded award(s) were left out.", note);
     }
 
     [Fact]

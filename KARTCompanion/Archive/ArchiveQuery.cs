@@ -13,6 +13,11 @@ public enum AwardStatus
     ExportedByCompanion,
     ExportedByBoth,
     Withdrawn,
+
+    /// <summary>The maintainer marked this award as never-export. Declared last so the status filter
+    /// dropdown, which is built from Enum.GetValues in declaration order, keeps the indices it had —
+    /// see HistoryExportPlanner.StatusForComboIndex.</summary>
+    Excluded,
 }
 
 /// <summary>Answers questions of the archive: what state is this award in, and which awards match a filter.</summary>
@@ -29,6 +34,12 @@ public static class ArchiveQuery
         // as not-exported (rather than inventing a fourth AwardStatus) is the safe reading: it means
         // "we don't know", not "the addon exported it".
         if (award.Withdrawn) return AwardStatus.Withdrawn;
+
+        // Below Withdrawn deliberately: the game dropping its own row is a stronger statement about an
+        // award than the maintainer choosing to hold it back, and a withdrawn award is already never
+        // exported. Above the export marks, because what matters about this award now is that it will
+        // not go again.
+        if (award.ExcludedFromExport) return AwardStatus.Excluded;
 
         var byAddon = award.Fields.TryGetValue("exported", out var v) && v is true;
         var byCompanion = award.ExportedByCompanionAt != null;
@@ -89,7 +100,7 @@ public static class ArchiveQuery
     }
 
     private static string? Str(ArchivedAward award, string key) =>
-        award.Fields.TryGetValue(key, out var v) ? v as string : null;
+        award.EffectiveFields.TryGetValue(key, out var v) ? v as string : null;
 
     private static DateTimeOffset Time(ArchivedAward award) =>
         award.Fields.TryGetValue("time", out var v) && v is double d

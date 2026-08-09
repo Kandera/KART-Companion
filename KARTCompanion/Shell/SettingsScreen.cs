@@ -9,16 +9,21 @@ namespace KARTCompanion.Shell;
 /// the addon's own branding (Theme.cs, colors lifted from KAimg.jpg).
 ///
 /// Two cards side by side (what you set once, on the left; what runs, on the right), a full-width
-/// status card below them, then the action buttons — filling the shell's own fixed 1042x700
-/// (see CompanionShell.ScreenSize) instead of the single narrow column this used to be. The status
-/// card has a fixed height: with a fixed frame there is no room left for a long SavedVariables path
-/// to grow the view downward the way it used to, so the status line is a single ellipsized line with
-/// a ToolTip carrying the untruncated text instead.</summary>
+/// status card below them, then the action buttons — filling the whole window instead of the single
+/// narrow column this used to be. The status card has a fixed height: a long SavedVariables path
+/// does not get to grow the view downward the way it used to, so the status line is a single
+/// ellipsized line with a ToolTip carrying the untruncated text instead.
+///
+/// The window is resizable, so the pixel coordinates are a starting layout rather than the final
+/// one: the right-hand card and the status card follow the right edge, the action row follows the
+/// bottom, and everything else keeps its place. See MinimumViewSize for how small this can get.</summary>
 public sealed class SettingsScreen : IScreen
 {
     private const int RailWidth = 64;
     private const int ContentLeft = RailWidth + 16;
     private const int ContentWidth = 950;
+    private const int RightMargin = 12;
+    private const int DesignHeight = 700;
     private const int CardGap = 20;
     private const int CardWidth = (ContentWidth - CardGap) / 2;
     private const int CardTop = 114;
@@ -44,10 +49,16 @@ public sealed class SettingsScreen : IScreen
 
     private string? _resolvedSavedVariablesPath;
     private readonly SyncGate _syncGate = new();
+    private readonly Size _minimumViewSize;
 
     public string Title => "Settings";
     public Theme.IconGlyph Glyph => Theme.IconGlyph.Sliders;
     public Control View => _view;
+
+    /// <summary>Measured off this screen's own controls in the constructor rather than stated here as
+    /// a number — same reason the action row's position is (see LayoutActionRow): a constant sitting
+    /// beside controls whose size Theme decides is a constant that quietly stops being true.</summary>
+    public Size MinimumViewSize => _minimumViewSize;
 
     public Color? StatusColor { get; private set; }
     public event EventHandler? StatusChanged;
@@ -72,7 +83,12 @@ public sealed class SettingsScreen : IScreen
         _runSync = runSync;
         _resolvedSavedVariablesPath = current.SavedVariablesFilePath;
 
-        _view = new Panel();
+        // Sized before anything is placed in it: every control below is at a fixed offset that
+        // assumes this size, and the ones anchored to the right or bottom edge would be displaced by
+        // the difference if the view took its real size afterwards. The shell resizes this view to
+        // the frame, but only after this constructor has run — and a screen owns its own layout and
+        // knows nothing about the frame (see IScreen), so the size it lays out at has to be its own.
+        _view = new Panel { Size = new Size(ContentLeft + ContentWidth + RightMargin, DesignHeight) };
 
         var connectionLeft = ContentLeft;
         var syncLeft = ContentLeft + CardWidth + CardGap;
@@ -81,9 +97,20 @@ public sealed class SettingsScreen : IScreen
         var connectionCaption = SectionCaption("CONNECTION", connectionLeft, captionTop);
         var syncCaption = SectionCaption("SYNC", syncLeft, captionTop);
 
+        // Both cards keep their top-left corner where it is. The right-hand one also follows the
+        // right edge, so a wider window widens the card that has room to spare rather than opening a
+        // gap beside it; the left one keeps its width, because its fields are inside it at a fixed
+        // width and would leave the same gap one level down.
         var connectionCard = new Panel { Left = connectionLeft, Top = CardTop, Width = CardWidth, Height = CardHeight };
         Theme.StylePanel(connectionCard, Theme.Panel);
-        var syncCard = new Panel { Left = syncLeft, Top = CardTop, Width = CardWidth, Height = CardHeight };
+        var syncCard = new Panel
+        {
+            Left = syncLeft,
+            Top = CardTop,
+            Width = CardWidth,
+            Height = CardHeight,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+        };
         Theme.StylePanel(syncCard, Theme.Panel);
 
         var fieldWidth = CardWidth - CardPadding * 2;
@@ -155,7 +182,15 @@ public sealed class SettingsScreen : IScreen
         const int statusCardHeight = 64;
         var statusCardTop = CardTop + CardHeight + 40;
         var statusCaption = SectionCaption("STATUS", ContentLeft, statusCardTop - 22);
-        var statusCard = new Panel { Left = ContentLeft, Top = statusCardTop, Width = ContentWidth, Height = statusCardHeight };
+        var statusCard = new Panel
+        {
+            Left = ContentLeft,
+            Top = statusCardTop,
+            Width = ContentWidth,
+            Height = statusCardHeight,
+            // Full width is the point of this card, so it stays full width.
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+        };
         Theme.StylePanel(statusCard, Theme.Panel);
 
         _liveStatusDot = Theme.CreateStatusDot(Theme.TextDim);
@@ -177,6 +212,8 @@ public sealed class SettingsScreen : IScreen
             AutoSize = false,
             AutoEllipsis = true,
             Font = new Font(_view.Font.FontFamily, 9f),
+            // Follows the card it sits in, so a wider window ellipsizes a long path less, not more.
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
         _liveStatusDot.Top = _statusLabel.Top + (_statusLabel.Height - _liveStatusDot.Height) / 2;
 
@@ -188,6 +225,7 @@ public sealed class SettingsScreen : IScreen
             Height = 14,
             AutoSize = false,
             Font = new Font(_view.Font.FontFamily, 8f),
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
         Theme.StyleLabel(_lastSyncLabel, dim: true);
         _lastSyncLabel.Text = SettingsScreenText.BuildLastSyncText(current.LastSyncUtc);
@@ -204,12 +242,16 @@ public sealed class SettingsScreen : IScreen
         // as an unfinished layout. Content at the top, actions at the bottom is what every settings
         // dialog does, and it turns that same empty stretch into deliberate breathing room.
         //
-        // Positioned from _view.Height in a SizeChanged handler rather than from the shell's own
-        // size constant. The shell sets View.Size AFTER this constructor has run, so the height is
-        // not knowable here — and reaching for CompanionShell.ScreenSize to learn it would break the
-        // rule IScreen states outright: "a screen owns its own layout and knows nothing about the
-        // frame." Reacting to its own view being resized keeps the screen inside that rule, and is
-        // what a resizable window will need from this layout anyway.
+        // Positioned from _view.Height in a SizeChanged handler rather than from the frame's size.
+        // The shell resizes this View — at startup and again every time the user drags an edge — and
+        // asking the shell how tall it is would break the rule IScreen states outright: "a screen
+        // owns its own layout and knows nothing about the frame." Reacting to its own view being
+        // resized keeps the screen inside that rule, and is what makes the row follow a resize.
+        //
+        // The anchors below are horizontal only — Top rather than Bottom — because the vertical
+        // position is LayoutActionRow's, and two mechanisms answering the same question is how they
+        // start disagreeing. Anchoring measures from wherever the control was when the view was last
+        // resized, which is exactly where LayoutActionRow will have put it.
         _forceSyncButton = Theme.CreateButton("Force Sync");
         _forceSyncButton.Left = ContentLeft;
         _forceSyncButton.Width = 100;
@@ -228,6 +270,8 @@ public sealed class SettingsScreen : IScreen
         var okButton = Theme.CreateButton("OK", primary: true);
         okButton.Width = 75;
         okButton.Left = ContentLeft + ContentWidth - okButton.Width;
+        // The one control on this screen that belongs to the right-hand end of the row.
+        okButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         okButton.Click += (_, _) => { OnOk(); _view.FindForm()?.Close(); };
 
         AcceptButton = okButton;
@@ -251,6 +295,17 @@ public sealed class SettingsScreen : IScreen
 
         LayoutActionRow();
         _view.SizeChanged += (_, _) => LayoutActionRow();
+
+        // Derived from what this screen's own content needs, and measured off the controls rather
+        // than stated as numbers. Width: the CONNECTION card does not shrink, so the narrowest this
+        // screen goes is that card plus the widest thing inside the SYNC card (which does shrink)
+        // and the padding either side of it. Height: the status card is the last thing above the
+        // action row, so it is the card's bottom edge plus a card gap plus the row itself.
+        var syncCardContentRight = Math.Max(
+            intervalRow.Right, Math.Max(autoSyncLabel.Left + autoSyncLabel.PreferredWidth, autoStartLabel.Left + autoStartLabel.PreferredWidth));
+        _minimumViewSize = new Size(
+            ContentLeft + CardWidth + CardGap + syncCardContentRight + CardPadding + RightMargin,
+            statusCard.Bottom + CardGap + okButton.Height + SettingsScreenText.ActionRowBottomMargin);
     }
 
     private static Label SectionCaption(string text, int left, int top)

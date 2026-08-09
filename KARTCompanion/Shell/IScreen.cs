@@ -20,6 +20,17 @@ public interface IScreen
     event EventHandler? StatusChanged;
 
     /// <summary>
+    /// The smallest this screen's layout still survives at. The window is resizable, and the shell
+    /// takes the largest of its screens' minimums as the window's own MinimumSize — it cannot work
+    /// that out itself without knowing what a screen contains, which is exactly what this interface
+    /// keeps it from knowing.
+    ///
+    /// The default is "no smaller than the size I laid myself out at", which is always safe and
+    /// simply means such a screen can only grow.
+    /// </summary>
+    Size MinimumViewSize => View.Size;
+
+    /// <summary>
     /// What Enter and Escape should do while this screen is showing, or null for "nothing".
     ///
     /// A Form has exactly one of each, so they belong to whichever screen is current — the shell

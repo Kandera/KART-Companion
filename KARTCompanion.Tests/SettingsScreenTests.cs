@@ -1,20 +1,9 @@
-using System.Drawing;
 using KARTCompanion.Shell;
 
 namespace KARTCompanion.Tests;
 
 public class SettingsScreenTests
 {
-    // Guards the one number CompanionShell now hands out as ClientSize for every screen — see
-    // CompanionShell's own remarks. HistoryScreen needs the width for its six columns
-    // (ContentLeft 80 + 950 + 12); a regression here silently drifts the whole shell's frame away
-    // from what the history list actually needs, the same drift this task exists to remove.
-    [Fact]
-    public void ScreenSize_MatchesTheHistoryScreenContentWidth()
-    {
-        Assert.Equal(new Size(1042, 700), CompanionShell.ScreenSize);
-    }
-
     [Fact]
     public void BuildWatchingText_NoPathConfigured_SaysSoInsteadOfNaming()
     {

@@ -35,6 +35,20 @@ public sealed class HistoryScreen : IScreen
     private const int RailWidth = 64;
     private const int ContentLeft = RailWidth + 16;
     private const int ContentWidth = 950;
+    private const int RightMargin = 12;
+    private const int DesignHeight = 700;
+
+    // The list's own geometry, kept as named numbers because the minimum size below is derived from
+    // them rather than guessed at.
+    private const int ListTop = 154;
+    /// <summary>Buttons and the three footer lines, from the list's bottom edge to the view's.</summary>
+    private const int BelowList = 132;
+    /// <summary>BorderStyle.FixedSingle, one pixel each side — the difference between the list's own
+    /// width and the width its columns actually get.</summary>
+    private const int ListBorder = 2;
+    /// <summary>The column header plus about four rows: the list's font has a 16px line height and a
+    /// details row is two more than that. Below this the list is a header with nothing under it.</summary>
+    private const int MinimumListHeight = 96;
 
     private readonly Func<ArchiveDocument> _loadArchive;
     private readonly Action<ArchiveDocument> _saveArchive;
@@ -61,6 +75,15 @@ public sealed class HistoryScreen : IScreen
     public string Title => "Loot History";
     public Theme.IconGlyph Glyph => Theme.IconGlyph.List;
     public Control View => _view;
+
+    /// <summary>Derived from what the list itself needs, not chosen: the five fixed columns plus a
+    /// whole minimum Item column (see HistoryListLayout), the list's own border, and the margins
+    /// either side of it. Narrower than this and a column would have to collapse; at exactly this
+    /// width Item sits on its clamp. Vertically: the filter row above the list, four rows' worth of
+    /// list, and the footer below it.</summary>
+    public Size MinimumViewSize => new(
+        ContentLeft + ListBorder + HistoryListLayout.MinimumListWidth(HistoryListLayout.LogicalColumnWidths) + RightMargin,
+        ListTop + MinimumListHeight + BelowList);
 
     // Enter and Escape belong to whichever screen is showing. They used to be wired to the Settings
     // screen's OK and Cancel for the lifetime of the window, so Enter here saved settings and closed
@@ -94,9 +117,22 @@ public sealed class HistoryScreen : IScreen
         _awards = awards;
         _loadArchive = loadArchive;
         _saveArchive = saveArchive;
-        _view = new Panel();
+        // Sized before anything is placed in it, because everything below is placed at a pixel
+        // offset that assumes this size and then anchored to an edge of it. WinForms anchoring keeps
+        // the gap a control had to its parent's edges at the moment the parent is resized, so a
+        // control laid out in a 200x100 default panel and anchored to its right edge would jump by
+        // 800px the first time the view took its real width. The shell resizes this view to the
+        // frame, but only after this constructor has run (see CompanionShell), so the screen has to
+        // establish its own layout size itself — which is also what IScreen asks of it: the screen
+        // owns its layout and knows nothing about the frame.
+        _view = new Panel { Size = new Size(ContentLeft + ContentWidth + RightMargin, DesignHeight) };
 
         // --- filter row ---
+        // Everything in this row keeps WinForms' default Top|Left anchor: it is a row of fields at a
+        // fixed size, and a fixed-size field that follows the right edge only travels away from the
+        // ones beside it. The search box in particular was tried against the right edge and cannot
+        // have it — at the window's minimum width it would have reached back across the Status
+        // dropdown.
         var playerLabel = FilterLabel("Player", ContentLeft);
         _playerCombo = FilterCombo(ContentLeft, 150);
 
@@ -124,15 +160,21 @@ public sealed class HistoryScreen : IScreen
             Height = 14,
             Font = new Font(_view.Font.FontFamily, 8f),
             ForeColor = Theme.Error,
+            // Spans the content column, so it follows both of its edges.
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
 
         // --- the list itself ---
         _listView = new SmoothListView
         {
             Left = ContentLeft,
-            Top = 154,
+            Top = ListTop,
             Width = ContentWidth,
-            Height = 414,
+            Height = DesignHeight - ListTop - BelowList,
+            // The one control that takes the whole resize, in both directions: more room means more
+            // rows and a wider Item column (see ApplyColumnWidths), which is what the extra room is
+            // for.
+            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
             View = System.Windows.Forms.View.Details,
             VirtualMode = true,
             OwnerDraw = true,
@@ -149,20 +191,18 @@ public sealed class HistoryScreen : IScreen
         // plus the 6px DrawRow indents and headroom — not guessed. "exported (companion)" needs
         // 125px and the Status column gave it 124, so the one status that triggers the
         // duplicate-export notice was the one status you could not read (it rendered as
-        // "exported (companio…"). Widening it costs nothing: the six worst-case strings need 770px
-        // of the 950 available, so every column here is above what it has to hold.
+        // "exported (companio…").
         //
-        // Still fixed pixels, and that is a known limit rather than an oversight: a ListView's column
-        // widths are not touched by WinForms' font-based auto-scaling, so at 125% display scaling the
-        // text grows (the same string measures 158px) while these numbers do not. Scaling them
-        // belongs with the resizable-window work, which is where the rest of this layout learns to
-        // adapt; until then the headroom above absorbs it and Status clips first.
-        _listView.Columns.Add("Time", 115);
-        _listView.Columns.Add("Player", 105);
-        _listView.Columns.Add("Item", 250);
-        _listView.Columns.Add("Reason", 110);
-        _listView.Columns.Add("Raid", 205);
-        _listView.Columns.Add("Status", 165);
+        // The numbers live in HistoryListLayout and are applied by ApplyColumnWidths, which is also
+        // where they are scaled for the display and where Item takes up the slack — the widths added
+        // here are only a starting point, and are replaced before anything is drawn.
+        foreach (var (header, width) in HistoryListLayout.Columns)
+            _listView.Columns.Add(header, width);
+        ApplyColumnWidths();
+        // The list is anchored to all four edges, so this runs on every window resize. ClientSize
+        // rather than Size: it is what the columns actually get, and it is the one that changes when
+        // the list grows a vertical scrollbar.
+        _listView.ClientSizeChanged += (_, _) => ApplyColumnWidths();
         _listView.RetrieveVirtualItem += (_, e) => e.Item = BuildRow(_filtered[e.ItemIndex]);
         _listView.DrawColumnHeader += DrawHeader;
         _listView.DrawItem += (_, e) => e.DrawDefault = false;
@@ -179,28 +219,36 @@ public sealed class HistoryScreen : IScreen
             Top = _listView.Top,
             Width = _listView.Width,
             Height = _listView.Height,
+            // The same four edges as the list it covers, so it keeps covering it exactly.
+            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
             TextAlign = ContentAlignment.MiddleCenter,
             Text = "No awards recorded yet — the archive fills in as loot is synced.",
         };
         Theme.StyleLabel(_emptyLabel, dim: true);
 
         // --- footer: actions + the lines the brief asks for ---
+        // The whole footer is anchored to the bottom-left corner and nothing else: these are actions
+        // and sentences, both of which belong under the start of the list rather than spread across
+        // however wide the window has been dragged.
         _copyButton = Theme.CreateButton("Copy for WoWUtils", primary: true);
         _copyButton.Left = ContentLeft;
         _copyButton.Top = 580;
         _copyButton.Width = 170;
+        _copyButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _copyButton.Click += (_, _) => OnCopy();
 
         _saveButton = Theme.CreateButton("Save a copy…");
         _saveButton.Left = _copyButton.Right + 10;
         _saveButton.Top = 580;
         _saveButton.Width = 140;
+        _saveButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _saveButton.Click += (_, _) => OnSaveCopy();
 
         _editButton = Theme.CreateButton("Edit award…");
         _editButton.Left = _saveButton.Right + 10;
         _editButton.Top = 580;
         _editButton.Width = 130;
+        _editButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _editButton.Click += (_, _) => EditSelected();
 
         _countLabel = FooterLabel(622);
@@ -267,9 +315,28 @@ public sealed class HistoryScreen : IScreen
             Width = ContentWidth,
             AutoSize = true,
             MaximumSize = new Size(ContentWidth, 0),
+            Anchor = AnchorStyles.Bottom | AnchorStyles.Left,
         };
         Theme.StyleLabel(label, dim: true);
         return label;
+    }
+
+    // A ListView's column widths are the one part of this layout WinForms' own scaling never
+    // touches: the font grows with the display scale and the numbers do not, which is why
+    // "exported (companion)" measures 125px at 100% and 158px at 125% against a Status column that
+    // stays 165 either way. LogicalToDeviceUnits asks the control what its own display does rather
+    // than working a ratio out here, and Item is handed whatever the list has left over
+    // (see HistoryListLayout).
+    private void ApplyColumnWidths()
+    {
+        var scaled = HistoryListLayout.LogicalColumnWidths.Select(w => _listView.LogicalToDeviceUnits(w)).ToArray();
+        var widths = HistoryListLayout.Allocate(
+            scaled, _listView.LogicalToDeviceUnits(HistoryListLayout.MinimumItemWidth), _listView.ClientSize.Width);
+
+        // Only where it differs: assigning a column width can move the list's own scrollbars, which
+        // is what raised ClientSizeChanged to get here in the first place.
+        for (var i = 0; i < widths.Length; i++)
+            if (_listView.Columns[i].Width != widths[i]) _listView.Columns[i].Width = widths[i];
     }
 
     // A small ListView subclass for the two things the control does not give us: double buffering (a
@@ -712,6 +779,70 @@ public sealed class HistoryScreen : IScreen
         // Exactly one row: a correction is a statement about one award, and there is no sensible
         // meaning for "apply this player name to twelve of them".
         _editButton.Enabled = _listView.SelectedIndices.Count == 1;
+    }
+}
+
+/// <summary>
+/// How the history list's six columns divide up whatever width the list has, pulled out of
+/// HistoryScreen so it can be tested without constructing a Form — see HistoryExportPlanner's own
+/// remarks on why nothing else there has automated coverage.
+///
+/// The rule is one sentence: the five fixed columns keep their width, scaled for the display, and
+/// Item absorbs everything left over. Item is the only column with no natural maximum — an item
+/// name is as long as it is — so it is where the slack belongs; every other column is already sized
+/// to the worst realistic value it can hold, and giving those the slack would only pad values that
+/// were never going to need it.
+/// </summary>
+public static class HistoryListLayout
+{
+    /// <summary>The columns in the order HistoryScreen adds them, with the width each needs at 100%
+    /// display scaling. Measured against the worst realistic value in that column in the list's own
+    /// font (Segoe UI 9pt) plus DrawRow's 6px indent — see HistoryScreen. Header and width together
+    /// so the widths cannot drift out of step with the order they are applied in, which
+    /// HistoryExportPlanner.FieldForColumn also depends on.</summary>
+    public static readonly IReadOnlyList<(string Header, int Width)> Columns = new[]
+    {
+        ("Time", 115), ("Player", 105), ("Item", 250), ("Reason", 110), ("Raid", 205), ("Status", 165),
+    };
+
+    public static readonly IReadOnlyList<int> LogicalColumnWidths = Columns.Select(c => c.Width).ToArray();
+
+    /// <summary>Item's index in <see cref="Columns"/> — the column that takes the slack.</summary>
+    public const int ItemColumn = 2;
+
+    /// <summary>The narrowest Item is ever made, at 100% display scaling. Measured, not chosen: eight
+    /// real raid item names measure 131–170px in the list's own font, with a median of 151, and
+    /// DrawRow indents its text by 6px. At 160 about half of them still render whole and the rest
+    /// ellipsize; below it the column stops identifying the item at all, which is the point of
+    /// clamping rather than letting it shrink to nothing.</summary>
+    public const int MinimumItemWidth = 160;
+
+    /// <summary>The five columns whose width does not move.</summary>
+    public static int FixedColumnsWidth(IReadOnlyList<int> widths)
+    {
+        var total = 0;
+        for (var i = 0; i < widths.Count; i++)
+            if (i != ItemColumn) total += widths[i];
+        return total;
+    }
+
+    /// <summary>The narrowest list these columns fit in: the fixed five plus a whole minimum Item.
+    /// The window's own minimum size is derived from this (see HistoryScreen.MinimumViewSize).</summary>
+    public static int MinimumListWidth(IReadOnlyList<int> widths) =>
+        FixedColumnsWidth(widths) + MinimumItemWidth;
+
+    /// <summary>What each column gets. The five fixed ones keep the width they were handed — already
+    /// scaled to the display by the caller, so nothing here has to know what a DPI is — and Item
+    /// takes the rest.
+    ///
+    /// Item never goes below <paramref name="minimumItemWidth"/>, even when that makes the columns
+    /// wider than the list. A list too narrow for its own columns then scrolls sideways, which is a
+    /// thing the user can do something about; a column squeezed to nothing is not.</summary>
+    public static int[] Allocate(IReadOnlyList<int> scaledWidths, int minimumItemWidth, int listWidth)
+    {
+        var widths = scaledWidths.ToArray();
+        widths[ItemColumn] = Math.Max(minimumItemWidth, listWidth - FixedColumnsWidth(scaledWidths));
+        return widths;
     }
 }
 

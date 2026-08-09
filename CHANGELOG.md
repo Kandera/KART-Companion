@@ -38,6 +38,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   re-deciding.
 
 ### Changed
+- **The window can be resized.** Drag any edge or corner of the borderless card. Both screens follow:
+  the history list grows in both directions, its footer stays at the bottom, and Settings' right-hand
+  and status cards follow the right edge. The size survives switching screens, and the window will
+  not go below the size the history list's six columns actually need (954x492).
+- **The history list's columns adapt.** The five fixed columns are scaled for the display — at 125%
+  scaling `exported (companion)` grows from 125px to 158px, and the column widths used to stay put
+  and clip it — and the **Item** column takes whatever width is left over, so a wider window gives
+  the one column with no natural maximum more room. Too narrow for all six and Item stops at a
+  readable minimum and the list scrolls sideways instead of a column collapsing.
 - **The shell window no longer resizes when you switch screens.** Settings and the history screen
   used to each dictate their own window width (488px vs 1042px), so switching screens changed the
   window's size — and since its position is only set once at startup, it grew rightward from

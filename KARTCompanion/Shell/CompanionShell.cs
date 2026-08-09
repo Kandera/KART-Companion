@@ -14,18 +14,7 @@ public sealed class CompanionShell : Form
 {
     private const int RailWidth = 64;
     private const int ContentLeft = RailWidth + 16;
-
-    /// <summary>The one client size every screen fills. The shell decides this now, not whichever
-    /// screen happens to be current: each screen used to dictate ClientSize through its own
-    /// View.Size, and Settings' 488px and the history screen's 1042px disagreed, so the window
-    /// changed width on every switch — with Location set once at startup and never revisited, the
-    /// window grew rightward from wherever it was centred for the narrower screen, running the
-    /// history screen's right edge off-screen on a 1366px display.
-    ///
-    /// 1042 = ContentLeft (80) + 950 (the history list's own content width, needed for its six
-    /// columns) + 12 (its own right margin) — the widest of the two screens before this change, so
-    /// nothing here shrinks. 700 matches the history screen's own view height.</summary>
-    public static readonly Size ScreenSize = new(1042, 700);
+    private const int RightMargin = 12;
 
     private readonly IReadOnlyList<IScreen> _screens;
     private readonly Panel _rail;
@@ -63,12 +52,29 @@ public sealed class CompanionShell : Form
         StartPosition = FormStartPosition.CenterScreen;
         Theme.StyleForm(this);
 
+        // The frame opens at whatever the largest screen laid itself out at, and never shrinks below
+        // the largest minimum any of them reports (see IScreen.MinimumViewSize). Both are asked of
+        // the screens rather than kept as a constant here: a screen owns its own layout, and a
+        // constant that has to agree with those layouts is one that silently stops agreeing. This is
+        // still the shell deciding one size for every screen, which is what it was doing before —
+        // each screen used to dictate ClientSize through its own View.Size, and Settings' 488px and
+        // the history screen's 1042px disagreed, so the window changed width on every switch.
+        //
+        // A size now, not a permanent assertion: the user resizes this window (see WndProc), and
+        // nothing re-asserts either number afterwards. FormBorderStyle.None means Size and ClientSize
+        // are the same rectangle, so MinimumSize — which is about the outer size — can be set
+        // straight from what the screens' views need.
+        ClientSize = ShellFrame.LargestOf(screens.Select(s => s.View.Size));
+        MinimumSize = ShellFrame.LargestOf(screens.Select(s => s.MinimumViewSize));
+
         // Icon rail: a narrow navigation-style column separating the logo/nav glance from the
-        // screen's own fields. Height tracks whatever the current screen needs (see
-        // SyncFrameToCurrentScreen), same as it tracked the dialog's own final height before.
+        // screen's own fields. Height tracks the window's own (see LayoutChrome), so it follows a
+        // resize.
         _rail = new Panel { Left = 0, Top = 0, Width = RailWidth };
         Theme.StylePanel(_rail, Theme.RailBackground);
         Theme.MakeDragHandle(_rail, this);
+        // The rail covers the whole left edge, so without this the left edge could not be grabbed.
+        FrameEdgePassThrough.Attach(_rail, this);
 
         _railDivider = new Panel { Left = RailWidth, Top = 0, Width = 1, BackColor = Theme.BorderStrong };
 
@@ -94,7 +100,7 @@ public sealed class CompanionShell : Form
 
         // Mirrors whichever screen is current's StatusColor — a health-at-a-glance dot the rail
         // renders without knowing what "health" means for that screen (see IScreen). Position
-        // tracks the rail's own height (see SyncFrameToCurrentScreen), same as before.
+        // tracks the rail's own height (see LayoutChrome), same as before.
         _railStatusDot = Theme.CreateStatusDot(Theme.TextDim);
         _railStatusDot.Left = (RailWidth - _railStatusDot.Width) / 2;
         Theme.MakeDragHandle(_railStatusDot, this);
@@ -148,11 +154,19 @@ public sealed class CompanionShell : Form
             // rail and header sit in front of it (see the BringToFront calls below) and cover
             // the strip a screen's View leaves blank on its left.
             screen.View.Location = Point.Empty;
-            // The shell owns sizing now (see ScreenSize) — a screen no longer sets its own
-            // View.Size to whatever it needs.
-            screen.View.Size = ScreenSize;
+            // Size first, anchors second, and the order is the whole point. WinForms anchoring keeps
+            // whatever gap a control had to its parent's edges at the moment the parent changes size,
+            // so a screen laid out at one size and then jumped to another before its anchors were set
+            // would have every anchored control displaced by the difference. The screens have already
+            // laid themselves out at their own view size, ClientSize above is the largest of exactly
+            // those sizes, and this assignment therefore either changes nothing or gives a smaller
+            // screen slack it has not anchored anything against yet.
+            screen.View.Size = ClientSize;
+            screen.View.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            // A screen's View covers the entire client area, so it would otherwise swallow every
+            // hit-test the frame's edges need (see FrameEdgePassThrough).
+            FrameEdgePassThrough.Attach(screen.View, this);
             screen.View.Visible = screen == Current;
-            screen.View.SizeChanged += (_, _) => { if (screen == Current) SyncFrameToCurrentScreen(); };
             screen.StatusChanged += (_, _) => { if (screen == Current) UpdateRailStatusDot(); };
             Controls.Add(screen.View);
         }
@@ -164,11 +178,16 @@ public sealed class CompanionShell : Form
         foreach (var chrome in new Control[] { _rail, _railDivider, titleLabel, _subtitleLabel, _headerDivider, _closeGlyph })
             chrome.BringToFront();
 
+        // The chrome is laid out against the client size, so it has to be re-laid every time the user
+        // drags an edge. The screens themselves need nothing here — their views are anchored to all
+        // four edges above, and each screen's own controls are anchored inside them.
+        Resize += (_, _) => LayoutChrome();
+
         SwitchTo(Current);
         _started = true;
         // ApplyRoundedFormRegion re-subscribes to Resize internally, so this needs to run only
-        // once — later ClientSize changes from SwitchTo/SyncFrameToCurrentScreen already trigger
-        // Resize, which re-applies the rounded Region on its own.
+        // once — every later size change, including the user dragging an edge, raises Resize and
+        // re-applies the rounded Region on its own.
         Theme.ApplyRoundedFormRegion(this);
     }
 
@@ -203,24 +222,21 @@ public sealed class CompanionShell : Form
         // because there is no action every screen agrees is the safe one.
         AcceptButton = screen.AcceptButton;
         CancelButton = screen.CancelButton ?? _escapeCloseButton;
-        SyncFrameToCurrentScreen();
+        LayoutChrome();
         UpdateRailStatusDot();
         screen.OnShown();
     }
 
-    // The shell sizes itself to ScreenSize, the same for every screen — see that field's own
-    // remarks for why. Everything else this syncs (rail/divider height, header divider width, the
-    // close glyph's position) is worked out against the shell's own size, not the current screen's.
-    // Still re-run on every SizeChanged of the current screen's View: nothing sets that any more
-    // (a screen no longer grows itself — see e.g. SettingsScreen's fixed-height status card), but
-    // this stays wired in case that ever changes again.
-    private void SyncFrameToCurrentScreen()
+    // Rail and divider heights, the header divider's width and the close glyph's position, all
+    // against the CURRENT client size. This used to re-assert ClientSize from a constant on every
+    // screen switch, which would have undone the user's resize the moment they clicked the other
+    // rail icon; the size is now the user's to set and nothing here touches it.
+    private void LayoutChrome()
     {
-        ClientSize = ScreenSize;
         _rail.Height = ClientSize.Height;
         _railDivider.Height = ClientSize.Height;
-        _headerDivider.Width = ScreenSize.Width - ContentLeft - 12;
-        _closeGlyph.Left = ScreenSize.Width - _closeGlyph.Width - 4;
+        _headerDivider.Width = ClientSize.Width - ContentLeft - RightMargin;
+        _closeGlyph.Left = ClientSize.Width - _closeGlyph.Width - 4;
         _railStatusDot.Top = _rail.Height - 30;
     }
 
@@ -230,5 +246,174 @@ public sealed class CompanionShell : Form
         var color = Current.StatusColor;
         _railStatusDot.Visible = color.HasValue;
         if (color.HasValue) Theme.SetStatusDotColor(_railStatusDot, color.Value);
+    }
+
+    private const int WM_NCHITTEST = 0x84;
+
+    /// <summary>
+    /// FormBorderStyle.None leaves no resize border for Windows to hit-test, the same way it leaves
+    /// no title bar to drag by (see Theme.MakeDragHandle). This is the other half of that: the outer
+    /// few pixels of the client area answer as the frame's edges and corners, and Windows' own sizing
+    /// loop does the rest — no bespoke drag arithmetic, and the resize cursors come with it.
+    ///
+    /// Only the ring answers; everything inside it falls through to the base behaviour, so every
+    /// control, drag handle and click on the window is untouched.
+    /// </summary>
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WM_NCHITTEST)
+        {
+            var edge = ShellFrame.ResizeEdgeAt(PointToClient(ShellFrame.PointFromLParam(m.LParam)), ClientSize);
+            if (edge != ShellFrame.FrameEdge.None)
+            {
+                m.Result = (IntPtr)ShellFrame.HitTestCode(edge);
+                return;
+            }
+        }
+
+        base.WndProc(ref m);
+    }
+
+    /// <summary>
+    /// Lets the frame's hit-test reach the form through a control that covers its edge.
+    ///
+    /// A child control eats the mouse before its parent ever sees it — the fact this class already
+    /// documents for the drag handles, and the reason every inert thing on the rail needs one of its
+    /// own. It applies to the resize ring just as much: each screen's View covers the entire client
+    /// area and the rail covers the left edge, so the form's own WM_NCHITTEST would never once be
+    /// asked about the outer six pixels. Answering HTTRANSPARENT there is the documented way to say
+    /// "not mine" — Windows keeps looking at the windows underneath, in the same thread, until one
+    /// answers something else, which here is the form.
+    ///
+    /// A NativeWindow rather than a Panel subclass because a screen builds its own View (see IScreen:
+    /// a screen knows nothing about the frame), so the frame has to add this to controls it did not
+    /// create.
+    /// </summary>
+    private sealed class FrameEdgePassThrough : NativeWindow
+    {
+        private const int HTTRANSPARENT = -1;
+
+        private readonly Form _form;
+
+        private FrameEdgePassThrough(Form form) => _form = form;
+
+        public static void Attach(Control control, Form form)
+        {
+            var passThrough = new FrameEdgePassThrough(form);
+            if (control.IsHandleCreated) passThrough.AssignHandle(control.Handle);
+            // A WinForms control can destroy and recreate its handle at any time (a BackColor change
+            // is enough for some of them), which would leave this subclassing a handle that no longer
+            // exists.
+            control.HandleCreated += (_, _) => passThrough.AssignHandle(control.Handle);
+            control.HandleDestroyed += (_, _) => passThrough.ReleaseHandle();
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_NCHITTEST
+                && ShellFrame.ResizeEdgeAt(_form.PointToClient(ShellFrame.PointFromLParam(m.LParam)), _form.ClientSize)
+                    != ShellFrame.FrameEdge.None)
+            {
+                m.Result = (IntPtr)HTTRANSPARENT;
+                return;
+            }
+
+            base.WndProc(ref m);
+        }
+    }
+}
+
+/// <summary>
+/// The frame's geometry decisions, kept out of CompanionShell so they can be tested without
+/// constructing a Form — see HistoryExportPlanner's own remarks on why nothing else there has
+/// automated coverage.
+/// </summary>
+public static class ShellFrame
+{
+    /// <summary>How far in from an edge counts as grabbing it. Narrow on purpose: the ring is taken
+    /// away from whatever sits underneath it — the rail's drag area, a screen's own content — so it
+    /// is kept to about the thickness of the native sizing border it stands in for.</summary>
+    public const int GripMargin = 6;
+
+    /// <summary>How far ALONG an edge still counts as its corner. Corners reach further than the
+    /// edge is deep for the obvious reason: where two 6px margins overlap is a 6x6 target, which is
+    /// not a thing a mouse can be expected to find.</summary>
+    public const int CornerMargin = 16;
+
+    public enum FrameEdge { None, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight }
+
+    /// <summary>Which edge or corner of the frame a client-area point belongs to, or None for
+    /// everything the frame does not claim — which is nearly all of the window, and is what leaves
+    /// the drag handles and every control alone.</summary>
+    public static FrameEdge ResizeEdgeAt(Point point, Size clientSize) =>
+        ResizeEdgeAt(point, clientSize, GripMargin, CornerMargin);
+
+    /// <param name="gripMargin">How deep the ring is.</param>
+    /// <param name="cornerMargin">How far a corner reaches along each edge.</param>
+    public static FrameEdge ResizeEdgeAt(Point point, Size clientSize, int gripMargin, int cornerMargin)
+    {
+        // Outside the client area is not the frame's business. PointToClient can hand us negatives
+        // (a point over the window's own non-client area, or simply a stale position), and without
+        // this an x of -3 would still read as "within 6 of the left edge" and claim a resize for a
+        // point that is not even on the window.
+        if (point.X < 0 || point.Y < 0 || point.X >= clientSize.Width || point.Y >= clientSize.Height)
+            return FrameEdge.None;
+
+        var left = point.X < gripMargin;
+        var right = point.X >= clientSize.Width - gripMargin;
+        var top = point.Y < gripMargin;
+        var bottom = point.Y >= clientSize.Height - gripMargin;
+
+        var nearLeft = point.X < cornerMargin;
+        var nearRight = point.X >= clientSize.Width - cornerMargin;
+        var nearTop = point.Y < cornerMargin;
+        var nearBottom = point.Y >= clientSize.Height - cornerMargin;
+
+        // A corner is claimed from both of its edges, so the grabbable shape is an L in each corner
+        // rather than the tiny square where the two margins happen to overlap.
+        if ((top && nearLeft) || (left && nearTop)) return FrameEdge.TopLeft;
+        if ((top && nearRight) || (right && nearTop)) return FrameEdge.TopRight;
+        if ((bottom && nearLeft) || (left && nearBottom)) return FrameEdge.BottomLeft;
+        if ((bottom && nearRight) || (right && nearBottom)) return FrameEdge.BottomRight;
+
+        if (left) return FrameEdge.Left;
+        if (right) return FrameEdge.Right;
+        if (top) return FrameEdge.Top;
+        if (bottom) return FrameEdge.Bottom;
+        return FrameEdge.None;
+    }
+
+    /// <summary>The WM_NCHITTEST answer for an edge. These numbers are Windows', not ours — HTLEFT
+    /// is 10 and the rest follow it — so they are pinned by test rather than trusted to a rename.</summary>
+    public static int HitTestCode(FrameEdge edge) => edge switch
+    {
+        FrameEdge.Left => 10,
+        FrameEdge.Right => 11,
+        FrameEdge.Top => 12,
+        FrameEdge.TopLeft => 13,
+        FrameEdge.TopRight => 14,
+        FrameEdge.Bottom => 15,
+        FrameEdge.BottomLeft => 16,
+        FrameEdge.BottomRight => 17,
+        _ => 1, // HTCLIENT
+    };
+
+    /// <summary>The screen point packed into a WM_NCHITTEST lParam. Both halves are SIGNED 16-bit:
+    /// a monitor arranged to the left of the primary one has negative x, and reading it unsigned
+    /// would put the cursor 65,000 pixels to the right instead.</summary>
+    public static Point PointFromLParam(IntPtr lParam)
+    {
+        var packed = lParam.ToInt64();
+        return new Point((short)(packed & 0xFFFF), (short)((packed >> 16) & 0xFFFF));
+    }
+
+    /// <summary>The smallest size that contains every one of these — each dimension taken
+    /// independently, so a wide screen and a tall one together give a frame that fits both.</summary>
+    public static Size LargestOf(IEnumerable<Size> sizes)
+    {
+        var largest = Size.Empty;
+        foreach (var size in sizes)
+            largest = new Size(Math.Max(largest.Width, size.Width), Math.Max(largest.Height, size.Height));
+        return largest;
     }
 }

@@ -145,12 +145,24 @@ public sealed class HistoryScreen : IScreen
             ForeColor = Theme.Text,
             BorderStyle = BorderStyle.FixedSingle,
         };
-        _listView.Columns.Add("Time", 130);
-        _listView.Columns.Add("Player", 110);
-        _listView.Columns.Add("Item", 230);
-        _listView.Columns.Add("Reason", 120);
-        _listView.Columns.Add("Raid", 230);
-        _listView.Columns.Add("Status", 130);
+        // Widths measured against the worst realistic value in each column, in the list's own font,
+        // plus the 6px DrawRow indents and headroom — not guessed. "exported (companion)" needs
+        // 125px and the Status column gave it 124, so the one status that triggers the
+        // duplicate-export notice was the one status you could not read (it rendered as
+        // "exported (companio…"). Widening it costs nothing: the six worst-case strings need 770px
+        // of the 950 available, so every column here is above what it has to hold.
+        //
+        // Still fixed pixels, and that is a known limit rather than an oversight: a ListView's column
+        // widths are not touched by WinForms' font-based auto-scaling, so at 125% display scaling the
+        // text grows (the same string measures 158px) while these numbers do not. Scaling them
+        // belongs with the resizable-window work, which is where the rest of this layout learns to
+        // adapt; until then the headroom above absorbs it and Status clips first.
+        _listView.Columns.Add("Time", 115);
+        _listView.Columns.Add("Player", 105);
+        _listView.Columns.Add("Item", 250);
+        _listView.Columns.Add("Reason", 110);
+        _listView.Columns.Add("Raid", 205);
+        _listView.Columns.Add("Status", 165);
         _listView.RetrieveVirtualItem += (_, e) => e.Item = BuildRow(_filtered[e.ItemIndex]);
         _listView.DrawColumnHeader += DrawHeader;
         _listView.DrawItem += (_, e) => e.DrawDefault = false;

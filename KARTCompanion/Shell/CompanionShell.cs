@@ -33,10 +33,39 @@ public sealed class CompanionShell : Form
     // different screen" apart from "already on this one" — see SwitchTo's own remarks.
     private bool _started;
 
+    /// <summary>
+    /// The one question this frame asks Windows about the display: which working area applies to
+    /// this rectangle. It is a field rather than a call so that a test can answer it from a screen
+    /// layout that does not exist on the machine running it.
+    ///
+    /// WHY IT HAS TO BE INJECTABLE: the two clamps below are both about a SECOND screen with a
+    /// different working area — one is "the screen the window is on is not the one the proposed
+    /// rectangle overlaps most", the other is "the window has moved to a different screen". Neither
+    /// can be provoked on a machine with one display, and the only place this suite runs unattended
+    /// (windows-latest) has one. See CompanionShellFormTests.
+    ///
+    /// PRODUCTION NEVER INJECTS: the initializer is the real lookup, so the shipped application asks
+    /// Windows exactly as it did before, and the constructor parameter below is optional and unused
+    /// by TrayApplicationContext.
+    /// </summary>
+    private readonly Func<Rectangle, Size> _workingAreaOf = RealWorkingArea;
+
+    /// <summary>Screen.FromRectangle rather than Screen.FromControl: the latter reads Handle, which
+    /// CREATES the window, and this runs from the MinimumSize setter, which runs from the
+    /// constructor.</summary>
+    private static Size RealWorkingArea(Rectangle rectangle) => Screen.FromRectangle(rectangle).WorkingArea.Size;
+
     public IScreen Current { get; private set; }
 
-    public CompanionShell(IReadOnlyList<IScreen> screens, Bitmap logo, Icon icon)
+    /// <param name="workingAreaOf">Which working area applies to a rectangle. Null — which is what
+    /// the application passes — means ask Windows. Supplied only by tests, and only so the clamps
+    /// below can be driven over a screen layout the test machine does not have.</param>
+    public CompanionShell(
+        IReadOnlyList<IScreen> screens, Bitmap logo, Icon icon, Func<Rectangle, Size>? workingAreaOf = null)
     {
+        // Before anything that could assign MinimumSize, which is the property that reads it.
+        if (workingAreaOf is not null) _workingAreaOf = workingAreaOf;
+
         if (screens.Count == 0) throw new ArgumentException("A shell needs at least one screen.", nameof(screens));
         _screens = screens;
         Current = screens[0];
@@ -301,8 +330,9 @@ public sealed class CompanionShell : Form
     /// arrives as an ASSIGNMENT to this property, whoever makes it and whenever: catching it here
     /// catches every one of them, at the moment it happens, against the screen the window is on then.
     ///
-    /// Screen.FromRectangle rather than Screen.FromControl: the latter reads Handle, which CREATES
-    /// the window, and this setter runs from the constructor.
+    /// Bounds, and not the rectangle being proposed: that difference is the whole first bullet above,
+    /// and asking about it goes through <see cref="_workingAreaOf"/> so a test can supply a screen
+    /// layout where the two answers differ (see CompanionShellFormTests).
     ///
     /// Shrinking only, and safe to shrink: the list survives being narrower than its minimum — Item
     /// clamps and the list scrolls sideways (see HistoryListLayout) — so a window smaller than its
@@ -318,7 +348,7 @@ public sealed class CompanionShell : Form
     public override Size MinimumSize
     {
         get => base.MinimumSize;
-        set => base.MinimumSize = ShellFrame.ClampToWorkingArea(value, Screen.FromRectangle(Bounds).WorkingArea.Size);
+        set => base.MinimumSize = ShellFrame.ClampToWorkingArea(value, _workingAreaOf(Bounds));
     }
 
     // The other half, and the one WinForms does nothing about: a minimum that fitted the screen it
@@ -328,7 +358,7 @@ public sealed class CompanionShell : Form
     {
         base.OnLocationChanged(e);
 
-        var clamped = ShellFrame.ClampToWorkingArea(MinimumSize, Screen.FromRectangle(Bounds).WorkingArea.Size);
+        var clamped = ShellFrame.ClampToWorkingArea(MinimumSize, _workingAreaOf(Bounds));
         // Guarded: this fires for every pixel of a window drag, and assigning MinimumSize is not free
         // (WinForms re-runs its own constraint and can resize the window).
         if (clamped != MinimumSize) MinimumSize = clamped;

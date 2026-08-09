@@ -521,11 +521,16 @@ public class CompanionShellFormTests
     // On a single-screen machine WinForms' own constraint already answers with the right screen and
     // this passes whether or not the MinimumSize override below it exists. windows-latest, which is
     // the only place this suite runs unattended, has ONE display — so this test and the one after it
-    // are green there for the wrong reason, and the two mechanisms they are about (the MinimumSize
-    // override and the OnLocationChanged re-clamp) are effectively unverified by CI and rest on the
-    // maintainer's own multi-screen desk. Neither can be fixed from here: nothing in a test can
-    // conjure a second monitor. Read a CI pass on these two as "did not break the build", not as
-    // "the clamp works".
+    // are green there for the wrong reason. Read a CI pass on these two as "did not break the
+    // build", not as "the clamp works".
+    //
+    // WHAT THIS STILL BUYS, now that the clamp is also driven over an invented layout further down
+    // (…_OnAnInventedLayout): those two supply the shell's working-area lookup themselves, so they
+    // pin the WIRING and say nothing about the lookup the application actually uses. This pair is the
+    // only thing in the suite that runs the whole thing over REAL monitors — Screen.FromRectangle,
+    // real working areas, WinForms' own constraint stacked on top of ours — and on a multi-screen
+    // desk it is not vacuous. Keep both: they are the integration end of a mechanism whose unit end
+    // now has its own tests, and they cost one form each.
     [WinFormsFact]
     public void AMinimumBiggerThanTheScreenTheWindowIsOn_IsCutDownAsItIsSet()
     {
@@ -556,7 +561,7 @@ public class CompanionShellFormTests
     // WHERE THIS IS VACUOUS, AND IT IS VACUOUS ON CI: it needs a second screen with less room on it
     // than the first. On a single-screen machine the window never arrives anywhere new and this
     // passes either way — including on windows-latest, which has one display. See the test above for
-    // what that means for both of these.
+    // what that means for both of these, and for what they are still kept for.
     [WinFormsFact]
     public void AWindowDraggedOntoASmallerScreen_HasItsMinimumCutToThatScreen()
     {
@@ -586,6 +591,114 @@ public class CompanionShellFormTests
                 $"A minimum of {takenOnTheRoomiestScreen} came along to a screen with {nowOn} of room and is still "
                 + $"{shell.MinimumSize}: the window cannot be made to fit the screen it is on.");
         });
+    }
+
+    /// <summary>
+    /// A display layout that does not exist on whatever machine is running this — the seam the two
+    /// tests below are built on (see CompanionShell's <c>workingAreaOf</c> parameter).
+    ///
+    /// It answers the one question the shell asks about the display, the way
+    /// <see cref="Screen.FromRectangle"/> answers it: the screen a rectangle overlaps most, and the
+    /// FIRST of them when it overlaps none. That "overlaps most" is not decoration — it is the whole
+    /// defect the shell's MinimumSize override exists for, and a layout that answered by position
+    /// alone could not tell the window's own rectangle apart from the oversized one being proposed.
+    ///
+    /// Nothing here is a spy: both tests below assert about the size the shell ends up with, so a
+    /// layout that always gave the same answer would fail one of them (the first expects the tight
+    /// screen's working area, the second expects the roomy one's and then the tight one's).
+    /// </summary>
+    private sealed class InventedScreens
+    {
+        private readonly (Rectangle Bounds, Size WorkingArea)[] _screens;
+
+        public InventedScreens(params (Rectangle Bounds, Size WorkingArea)[] screens) => _screens = screens;
+
+        public Size WorkingAreaOf(Rectangle rectangle)
+        {
+            var best = _screens[0];
+            var mostOverlap = 0L;
+            foreach (var screen in _screens)
+            {
+                var shared = Rectangle.Intersect(screen.Bounds, rectangle);
+                var overlap = (long)shared.Width * shared.Height;
+                if (overlap > mostOverlap) { mostOverlap = overlap; best = screen; }
+            }
+
+            return best.WorkingArea;
+        }
+    }
+
+    /// <summary>Two screens side by side, deliberately far smaller than any real display: every
+    /// minimum these tests assert about has to survive WinForms' OWN constraint, which is applied on
+    /// top of the shell's and measured against the REAL screen (a working area, less two pixels — see
+    /// the MinimumSize override). Numbers this small are under that on any machine, so what comes
+    /// back is the shell's clamp and nothing else.</summary>
+    private static InventedScreens TwoScreens() => new(
+        // First, so it is also the fallback for a rectangle that overlaps neither.
+        (new Rectangle(0, 0, 400, 200), new Size(400, 200)),
+        (new Rectangle(400, 0, 600, 480), new Size(600, 480)));
+
+    // Stub screens small enough that the window fits inside one invented display: the frame opens at
+    // the largest of its screens' views, and a window bigger than the layout it is being clamped
+    // against would overlap both screens at once and make the arithmetic below meaningless.
+    private static StubScreen[] SmallScreens() => new[]
+    {
+        new StubScreen("Small", new Size(300, 150), new Size(100, 100)),
+    };
+
+    // THE CLAMP, DRIVEN OVER GEOMETRY INSTEAD OF HARDWARE — this is the one that is not vacuous on a
+    // single-display machine, and so not vacuous on windows-latest.
+    //
+    // The window sits wholly on the 400x200 screen. The minimum it is then handed implies a rectangle
+    // that reaches across both, and overlaps the 600x480 one far more — which is exactly the case
+    // WinForms' own constraint gets wrong, because it measures the PROPOSED rectangle. The shell has
+    // to measure the window's own.
+    //
+    // Three separate mutants land on this one assertion: not clamping at all (the minimum comes back
+    // at the real screen's working area, which is neither of these numbers), clamping against the
+    // proposed rectangle (600x480), and reaching past the seam to ask Windows directly (the real
+    // screen again).
+    [WinFormsFact]
+    public void AMinimumTooBigForTheScreenTheWindowIsOn_IsCutToThatScreen_OnAnInventedLayout()
+    {
+        WithStubShell(SmallScreens(), (shell, _) =>
+        {
+            shell.Location = new Point(10, 10);
+            WinFormsHarness.Pump();
+
+            shell.MinimumSize = new Size(5000, 5000);
+            WinFormsHarness.Pump();
+
+            Assert.Equal(new Size(400, 200), shell.MinimumSize);
+        }, TwoScreens().WorkingAreaOf);
+    }
+
+    // The other half, over the same invented layout: a minimum that fitted the screen it was set on
+    // does not fit any more once the window has moved, and nothing assigns it again on the way there.
+    //
+    // The first assertion is half the test. Without it a shell that clamped against one fixed screen —
+    // the primary, the smallest, the first one it found — would still pass the second, and the
+    // mechanism this is about is that the answer FOLLOWS the window.
+    [WinFormsFact]
+    public void AWindowMovedOntoASmallerScreen_HasItsMinimumCutToIt_OnAnInventedLayout()
+    {
+        WithStubShell(SmallScreens(), (shell, _) =>
+        {
+            shell.Location = new Point(400, 0);
+            WinFormsHarness.Pump();
+
+            // Fits the roomy screen in both dimensions, and is too tall for the tight one.
+            shell.MinimumSize = new Size(380, 300);
+            WinFormsHarness.Pump();
+            Assert.Equal(new Size(380, 300), shell.MinimumSize);
+
+            shell.Location = new Point(0, 0);
+            WinFormsHarness.Pump();
+
+            // Only the height had to give: the width already fitted, and clamping it too would be
+            // taking room away for no reason.
+            Assert.Equal(new Size(380, 200), shell.MinimumSize);
+        }, TwoScreens().WorkingAreaOf);
     }
 
     // --- the screens inside the frame ---
@@ -675,7 +788,12 @@ public class CompanionShellFormTests
 
     /// <summary>The shell over screens this test supplies, with the icon it was handed available to
     /// assert about. Same disposal contract as WithShell — see there for the HICON.</summary>
-    private static void WithStubShell(IReadOnlyList<StubScreen> screens, Action<CompanionShell, Icon> assertions)
+    /// <param name="workingAreaOf">The display layout the shell should clamp against, or null to let
+    /// it ask Windows as the application does. See <see cref="InventedScreens"/>.</param>
+    private static void WithStubShell(
+        IReadOnlyList<StubScreen> screens,
+        Action<CompanionShell, Icon> assertions,
+        Func<Rectangle, Size>? workingAreaOf = null)
     {
         Bitmap? logo = null;
         Icon? trayIcon = null;
@@ -686,7 +804,7 @@ public class CompanionShellFormTests
                 {
                     logo = AppIcon.LoadLogoBitmap();
                     trayIcon = AppIcon.CreateTrayIcon(logo);
-                    return new CompanionShell(screens.Cast<IScreen>().ToList(), logo, trayIcon);
+                    return new CompanionShell(screens.Cast<IScreen>().ToList(), logo, trayIcon, workingAreaOf);
                 },
                 shell => assertions(shell, trayIcon!));
         }

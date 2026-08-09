@@ -103,6 +103,63 @@ public class ShellFrameTests
         Assert.Equal(FrameEdge.None, ResizeEdgeAt(new Point(x, y), new Size(1000, 700), 6, 16));
     }
 
+    // --- the two constants themselves ---
+    //
+    // Everything above passes the margins in as literals, which tests the ARITHMETIC and pins none of
+    // the numbers production actually uses: GripMargin could be set to 0 — deleting the resize ring
+    // outright, since it is the window's only resize affordance — and every test above would still
+    // pass. These two go through the one-argument overload the window calls, so the constants are
+    // load bearing.
+
+    [Fact]
+    public void GripMargin_MakesTheRingExactlySixPixelsDeep()
+    {
+        var size = new Size(1000, 700);
+
+        Assert.Equal(FrameEdge.Left, ResizeEdgeAt(new Point(5, 350), size));
+        Assert.Equal(FrameEdge.None, ResizeEdgeAt(new Point(6, 350), size));
+        Assert.Equal(FrameEdge.Right, ResizeEdgeAt(new Point(994, 350), size));
+        Assert.Equal(FrameEdge.None, ResizeEdgeAt(new Point(993, 350), size));
+        Assert.Equal(FrameEdge.Top, ResizeEdgeAt(new Point(500, 5), size));
+        Assert.Equal(FrameEdge.None, ResizeEdgeAt(new Point(500, 6), size));
+        Assert.Equal(FrameEdge.Bottom, ResizeEdgeAt(new Point(500, 694), size));
+        Assert.Equal(FrameEdge.None, ResizeEdgeAt(new Point(500, 693), size));
+    }
+
+    [Fact]
+    public void CornerMargin_MakesEachCornerReachSixteenPixelsAlongItsEdges()
+    {
+        var size = new Size(1000, 700);
+
+        Assert.Equal(FrameEdge.TopLeft, ResizeEdgeAt(new Point(15, 2), size));
+        Assert.Equal(FrameEdge.Top, ResizeEdgeAt(new Point(16, 2), size));
+        Assert.Equal(FrameEdge.TopLeft, ResizeEdgeAt(new Point(2, 15), size));
+        Assert.Equal(FrameEdge.Left, ResizeEdgeAt(new Point(2, 16), size));
+        Assert.Equal(FrameEdge.BottomRight, ResizeEdgeAt(new Point(998, 684), size));
+        Assert.Equal(FrameEdge.Right, ResizeEdgeAt(new Point(998, 683), size));
+    }
+
+    // The close glyph is a child control, and a child wins the hit test before the form is ever
+    // asked: where the two overlap, the ring loses. Placed four pixels from the right edge — as it
+    // was — a 2x24 strip of the right edge and part of the top-right corner grip closed the window
+    // instead of resizing it. Asserted through the one-argument overload, against the ring the window
+    // really has.
+    [Fact]
+    public void CloseGlyphLeft_LeavesTheGlyphEntirelyOutsideTheResizeRing()
+    {
+        var size = new Size(1042, 700);
+        const int glyphWidth = 24;
+        var left = CloseGlyphLeft(size.Width, glyphWidth);
+        var rightmostPixel = left + glyphWidth - 1;
+
+        // Its rightmost column, at the glyph's own top row and at its bottom one, is still the form's.
+        Assert.Equal(FrameEdge.None, ResizeEdgeAt(new Point(rightmostPixel, 12), size));
+        Assert.Equal(FrameEdge.None, ResizeEdgeAt(new Point(rightmostPixel, 35), size));
+        // And nothing is wasted between the two: one pixel further right is already the ring.
+        Assert.Equal(FrameEdge.TopRight, ResizeEdgeAt(new Point(rightmostPixel + 1, 12), size));
+        Assert.Equal(FrameEdge.Right, ResizeEdgeAt(new Point(rightmostPixel + 1, 35), size));
+    }
+
     // These numbers are Windows', not ours: WM_NCHITTEST answers HTLEFT with 10 and the rest follow
     // it. Asserted as literals for that reason — an assertion written against our own constant would
     // agree with any value they were given.

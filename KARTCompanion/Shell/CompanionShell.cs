@@ -65,6 +65,15 @@ public sealed class CompanionShell : Form
         // are the same rectangle, so MinimumSize — which is about the outer size — can be set
         // straight from what the screens' views need.
         ClientSize = ShellFrame.LargestOf(screens.Select(s => s.View.Size));
+        // KNOWN, UNFIXED: this minimum is in logical pixels and WinForms scales it with the display,
+        // so the 954 it comes to becomes about 1431 physical pixels at 150% — wider than a 1366px
+        // display, on which the window could then not be made to fit its own screen at all. It is
+        // recorded here rather than clamped because the clamp would have to run AFTER WinForms' own
+        // scaling (not in this constructor), against the working area of whichever screen the window
+        // is on at the time, and nothing in the suite constructs a Form to check it against. The
+        // list itself survives being narrower than its minimum — Item clamps and the list scrolls
+        // sideways (see HistoryListLayout) — so a clamp is the right shape of fix when someone can
+        // see a 150% display to verify it on.
         MinimumSize = ShellFrame.LargestOf(screens.Select(s => s.MinimumViewSize));
 
         // Icon rail: a narrow navigation-style column separating the logo/nav glance from the
@@ -77,7 +86,13 @@ public sealed class CompanionShell : Form
         FrameEdgePassThrough.Attach(_rail, this);
 
         _railDivider = new Panel { Left = RailWidth, Top = 0, Width = 1, BackColor = Theme.BorderStrong };
+        // One pixel wide and the full height of the window, so it stands in the top and bottom rings
+        // the same way the rail stands in the left one — a single dead column the edge cannot be
+        // grabbed by, right where a mouse crossing the top edge is likely to be.
+        FrameEdgePassThrough.Attach(_railDivider, this);
 
+        // Top right, clear of the right ring — see ShellFrame.CloseGlyphLeft for why the two must not
+        // overlap. Left is set in LayoutChrome, against the current client width.
         _closeGlyph = Theme.CreateCloseGlyph(Close);
         _closeGlyph.Top = 12;
 
@@ -236,7 +251,7 @@ public sealed class CompanionShell : Form
         _rail.Height = ClientSize.Height;
         _railDivider.Height = ClientSize.Height;
         _headerDivider.Width = ClientSize.Width - ContentLeft - RightMargin;
-        _closeGlyph.Left = ClientSize.Width - _closeGlyph.Width - 4;
+        _closeGlyph.Left = ShellFrame.CloseGlyphLeft(ClientSize.Width, _closeGlyph.Width);
         _railStatusDot.Top = _rail.Height - 30;
     }
 
@@ -406,6 +421,16 @@ public static class ShellFrame
         var packed = lParam.ToInt64();
         return new Point((short)(packed & 0xFFFF), (short)((packed >> 16) & 0xFFFF));
     }
+
+    /// <summary>Where the close glyph's left edge goes: hard against the top right of the window,
+    /// but clear of the resize ring. It used to sit 4px from the right edge, which put its two
+    /// rightmost pixel columns inside the 6px right ring — and a child control wins the hit test
+    /// before the form is ever asked, so a 2x24 strip of that edge, and part of the top-right corner
+    /// grip, CLOSED THE WINDOW instead of resizing it. Derived from <see cref="GripMargin"/> rather
+    /// than chosen, so the two cannot drift back into each other; the glyph keeps its whole 24x24
+    /// hit area and only moves two pixels left, which is the cheaper of the two ways out (the other
+    /// is to let the ring take those two columns away from the close button).</summary>
+    public static int CloseGlyphLeft(int clientWidth, int glyphWidth) => clientWidth - glyphWidth - GripMargin;
 
     /// <summary>The smallest size that contains every one of these — each dimension taken
     /// independently, so a wide screen and a tall one together give a frame that fits both.</summary>

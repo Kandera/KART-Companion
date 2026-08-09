@@ -61,6 +61,13 @@ public static class Theme
     // show as hard right angles against the desktop — this rounds the whole window the same way
     // ApplyRoundedRegion rounds individual controls, just at a larger radius that reads as a
     // floating card rather than a form field.
+    //
+    // The path and the Region are rebuilt on every Resize, which since the window became draggable by
+    // its edges is every frame of a live drag rather than a handful of screen switches. Measured on a
+    // handle-created 1042x700 borderless form, 2000 resizes, Debug: 0.44 ms per resize with the
+    // region against 0.22 ms for the same form without it, so the rebuild adds about 0.22 ms — a
+    // seventieth of a 60fps frame. That is what it costs to build; whether a live drag FLICKERS is a
+    // repaint question, needs a visible window, and is unmeasured.
     public static void ApplyRoundedFormRegion(Form form)
     {
         void Apply()

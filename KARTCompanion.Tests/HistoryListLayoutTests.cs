@@ -87,6 +87,64 @@ public class HistoryListLayoutTests
                 [HistoryListLayout.ItemColumn]);
     }
 
+    // --- the display scaling itself ---
+    //
+    // The tests below hand Allocate widths that are ALREADY scaled, which pins what it does with them
+    // and nothing about where they came from: the scaling could be dropped from the caller entirely
+    // and this suite stayed green. AllocateForScale is that caller, minus the control — HistoryScreen
+    // now only supplies its list's own DeviceDpi.
+
+    // At 100% the columns are the widths as measured, and the starting list width still fits them
+    // exactly. Written as 96 over LogicalDpi rather than as 1.0, because that is the arithmetic
+    // HistoryScreen does with its list's own DeviceDpi — a 96-dpi display is what these widths were
+    // measured on, so it must come back out unscaled.
+    [Fact]
+    public void AllocateForScale_At100Percent_IsTheLogicalWidths()
+    {
+        Assert.Equal(
+            new[] { 115, 105, 248, 110, 205, 165 },
+            HistoryListLayout.AllocateForScale(96 / HistoryListLayout.LogicalDpi, listWidth: 948));
+    }
+
+    // At 125% every fixed column is 1.25x the width it measures at 100% — 115 -> 144, 105 -> 131,
+    // 110 -> 138, 205 -> 256, 165 -> 206. This is the whole reason the columns were touched: a
+    // ListView's column widths are the one part of the layout WinForms' own scaling never reaches, so
+    // at 125% the font grows into a column that has not, and "exported (companion)" ellipsizes.
+    [Fact]
+    public void AllocateForScale_At125Percent_ScalesEveryFixedColumnWithTheDisplay()
+    {
+        var widths = HistoryListLayout.AllocateForScale(1.25, listWidth: 1185);
+
+        Assert.Equal(new[] { 144, 131, 138, 256, 206 }, WithoutItem(widths));
+        Assert.Equal(310, widths[HistoryListLayout.ItemColumn]);
+    }
+
+    // 150%, to pin that this is a factor and not one hard-coded step: 115 -> 172, 105 -> 158,
+    // 110 -> 165, 205 -> 308, 165 -> 248. The halves round to even, exactly as WinForms' own
+    // Control.LogicalToDeviceUnits rounds them (checked against it by reflection: 115 at 144 dpi is
+    // 172 there too, not 173) — this was that call until the decision was pulled out of the control.
+    [Fact]
+    public void AllocateForScale_At150Percent_ScalesEveryFixedColumnWithTheDisplay()
+    {
+        Assert.Equal(
+            new[] { 172, 158, 165, 308, 248 },
+            WithoutItem(HistoryListLayout.AllocateForScale(1.5, listWidth: 1500)));
+    }
+
+    // Item's minimum is scaled with everything else. Left at its logical 160 it would be a fifth
+    // narrower at 125% than the width it was measured to need, which is the same as not having
+    // measured it.
+    [Fact]
+    public void AllocateForScale_At125Percent_ClampsItemAtItsScaledMinimum()
+    {
+        var widths = HistoryListLayout.AllocateForScale(1.25, listWidth: 500);
+
+        Assert.Equal(200, widths[HistoryListLayout.ItemColumn]);
+    }
+
+    private static int[] WithoutItem(int[] widths) =>
+        widths.Where((_, i) => i != HistoryListLayout.ItemColumn).ToArray();
+
     // At 125% display scaling the caller hands in widths the control has already scaled — the five
     // fixed ones must come back exactly as given, because that is the whole reason they were scaled:
     // a ListView's columns are untouched by WinForms' font scaling, so "exported (companion)" grows

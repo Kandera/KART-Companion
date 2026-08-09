@@ -324,14 +324,14 @@ public sealed class HistoryScreen : IScreen
     // A ListView's column widths are the one part of this layout WinForms' own scaling never
     // touches: the font grows with the display scale and the numbers do not, which is why
     // "exported (companion)" measures 125px at 100% and 158px at 125% against a Status column that
-    // stays 165 either way. LogicalToDeviceUnits asks the control what its own display does rather
-    // than working a ratio out here, and Item is handed whatever the list has left over
-    // (see HistoryListLayout).
+    // stays 165 either way. The list's own DeviceDpi is what the display does, and every decision
+    // taken from it — which widths get scaled, what Item's minimum becomes, who gets the slack —
+    // lives in HistoryListLayout where it can be tested without a control. What is left here is the
+    // one call that has to ask a control anything, and the loop that writes the answer back.
     private void ApplyColumnWidths()
     {
-        var scaled = HistoryListLayout.LogicalColumnWidths.Select(w => _listView.LogicalToDeviceUnits(w)).ToArray();
-        var widths = HistoryListLayout.Allocate(
-            scaled, _listView.LogicalToDeviceUnits(HistoryListLayout.MinimumItemWidth), _listView.ClientSize.Width);
+        var widths = HistoryListLayout.AllocateForScale(
+            _listView.DeviceDpi / HistoryListLayout.LogicalDpi, _listView.ClientSize.Width);
 
         // Only where it differs: assigning a column width can move the list's own scrollbars, which
         // is what raised ClientSizeChanged to get here in the first place.
@@ -844,6 +844,26 @@ public static class HistoryListLayout
         widths[ItemColumn] = Math.Max(minimumItemWidth, listWidth - FixedColumnsWidth(scaledWidths));
         return widths;
     }
+
+    /// <summary>The display scaling the widths above are written against: 96 dpi is 100%, so a scale
+    /// factor is a display's dpi over this.</summary>
+    public const double LogicalDpi = 96.0;
+
+    /// <summary>What each column gets on a display scaled by <paramref name="scale"/> — 1.0 at 100%,
+    /// 1.25 at 125%. Both the fixed widths and Item's minimum are scaled; a minimum left unscaled
+    /// would be a fifth too narrow at 125%, which is the same as not having measured it.
+    ///
+    /// The scale comes in as a number rather than being asked of the ListView so that the decision is
+    /// testable without a control — <see cref="HistoryScreen"/> passes its list's own DeviceDpi over
+    /// <see cref="LogicalDpi"/>, and the rounding below is the same expression Control's own
+    /// LogicalToDeviceUnits uses, so the two agree pixel for pixel.</summary>
+    public static int[] AllocateForScale(double scale, int listWidth) =>
+        Allocate(
+            LogicalColumnWidths.Select(w => Scaled(w, scale)).ToArray(),
+            Scaled(MinimumItemWidth, scale),
+            listWidth);
+
+    private static int Scaled(int logicalValue, double scale) => (int)Math.Round(logicalValue * scale);
 }
 
 /// <summary>

@@ -167,6 +167,10 @@ public sealed class HistoryScreen : IScreen
         // --- the list itself ---
         _listView = new SmoothListView
         {
+            // Named so a test can find this exact control rather than "the ListView on the screen",
+            // which is only true until there is a second one. Same for the empty-state label below —
+            // the two of them are what the z-order rule at the end of this constructor is about.
+            Name = "HistoryList",
             Left = ContentLeft,
             Top = ListTop,
             Width = ContentWidth,
@@ -215,6 +219,7 @@ public sealed class HistoryScreen : IScreen
 
         _emptyLabel = new Label
         {
+            Name = "HistoryEmptyLabel",
             Left = _listView.Left,
             Top = _listView.Top,
             Width = _listView.Width,
@@ -784,8 +789,9 @@ public sealed class HistoryScreen : IScreen
 
 /// <summary>
 /// How the history list's six columns divide up whatever width the list has, pulled out of
-/// HistoryScreen so it can be tested without constructing a Form — see HistoryExportPlanner's own
-/// remarks on why nothing else there has automated coverage.
+/// HistoryScreen so every case of it can be enumerated cheaply, without a window. That the screen
+/// calls it with the list's own scale and client width is a separate question, and one that does
+/// need a window — see HistoryScreenFormTests.
 ///
 /// The rule is one sentence: the five fixed columns keep their width, scaled for the display, and
 /// Item absorbs everything left over. Item is the only column with no natural maximum — an item
@@ -868,8 +874,8 @@ public static class HistoryListLayout
 
 /// <summary>
 /// The decision logic behind HistoryScreen's two export buttons, pulled out so it can be tested
-/// without constructing a Form — see HistoryScreen's own remarks on why nothing else there has
-/// automated coverage.
+/// without constructing a Form — a decision with no control in it is cheaper to enumerate every case
+/// of than one with.
 /// </summary>
 public static class HistoryExportPlanner
 {

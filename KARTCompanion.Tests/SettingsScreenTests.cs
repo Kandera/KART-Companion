@@ -48,8 +48,9 @@ public class SettingsScreenTests
 
     // The row sits a fixed margin above the bottom edge, and the button's OWN height decides where
     // its top goes. The previous version hard-coded a row height of 30 against buttons Theme.cs
-    // builds 34 tall, so the real margin was 36 and nothing could see it — the layout arithmetic is
-    // otherwise entirely untested, because nothing in this suite constructs a Form.
+    // builds 34 tall, so the real margin was 36 and nothing could see it. That the screen positions
+    // its real buttons from this is pinned separately, against a real window, in
+    // CompanionShellFormTests.
     [Fact]
     public void ActionRowTop_LeavesTheMarginBelowTheButtonsOwnHeight()
     {

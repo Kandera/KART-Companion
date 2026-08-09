@@ -5,10 +5,11 @@ using static KARTCompanion.Shell.ShellFrame;
 namespace KARTCompanion.Tests;
 
 /// <summary>
-/// The frame geometry behind a borderless window that can still be resized. Nothing in this suite
-/// constructs a Form (see HistoryExportPlanner's remarks), so the decisions are tested here and the
-/// wiring — WndProc answering with these codes — is left to the maintainer's own pass over the
-/// window.
+/// The frame geometry behind a borderless window that can still be resized — the decisions, taken
+/// without a window so they can be enumerated cheaply and exhaustively. The wiring that connects
+/// them to real controls (WndProc answering with these codes, the close glyph actually being placed
+/// by CloseGlyphLeft, the minimum size actually being clamped) is pinned against a real Form in
+/// CompanionShellFormTests.
 /// </summary>
 public class ShellFrameTests
 {

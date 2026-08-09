@@ -3,9 +3,10 @@ using KARTCompanion.Shell;
 namespace KARTCompanion.Tests;
 
 /// <summary>
-/// How the history list's six columns divide up the width they are given. Nothing in this suite
-/// constructs a Form (see HistoryExportPlanner's remarks), so the rule lives in a pure function and
-/// the ListView is only ever handed its answer.
+/// How the history list's six columns divide up the width they are given. The rule lives in a pure
+/// function so every case of it can be enumerated cheaply here; that the screen hands its real
+/// ListView the answer, at that list's own scale and client width, is pinned in
+/// HistoryScreenFormTests.
 /// </summary>
 public class HistoryListLayoutTests
 {

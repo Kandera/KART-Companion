@@ -67,25 +67,22 @@ public sealed class CompanionShell : Form
         ClientSize = ShellFrame.LargestOf(screens.Select(s => s.View.Size));
         // KNOWN, UNFIXED: this minimum is in logical pixels and WinForms scales it with the display,
         // so the 954 it comes to becomes about 1431 physical pixels at 150% — wider than a 1366px
-        // display, on which the window could then not be made to fit its own screen at all. It is
-        // recorded here rather than clamped because the clamp would have to run AFTER WinForms' own
-        // scaling (not in this constructor), against the working area of whichever screen the window
-        // is on at the time, and nothing in the suite constructs a Form to check it against. The
-        // list itself survives being narrower than its minimum — Item clamps and the list scrolls
-        // sideways (see HistoryListLayout) — so a clamp is the right shape of fix when someone can
-        // see a 150% display to verify it on.
+        // display, on which the window could then not be made to fit its own screen at all.
         MinimumSize = ShellFrame.LargestOf(screens.Select(s => s.MinimumViewSize));
 
         // Icon rail: a narrow navigation-style column separating the logo/nav glance from the
         // screen's own fields. Height tracks the window's own (see LayoutChrome), so it follows a
         // resize.
-        _rail = new Panel { Left = 0, Top = 0, Width = RailWidth };
+        // Named, like the other three pieces of chrome below: they are the controls the frame's own
+        // tests have to find, and a test that identifies chrome by "the child Panel that happens to
+        // be one pixel wide" starts asserting about a different control the day someone adds one.
+        _rail = new Panel { Name = "Rail", Left = 0, Top = 0, Width = RailWidth };
         Theme.StylePanel(_rail, Theme.RailBackground);
         Theme.MakeDragHandle(_rail, this);
         // The rail covers the whole left edge, so without this the left edge could not be grabbed.
         FrameEdgePassThrough.Attach(_rail, this);
 
-        _railDivider = new Panel { Left = RailWidth, Top = 0, Width = 1, BackColor = Theme.BorderStrong };
+        _railDivider = new Panel { Name = "RailDivider", Left = RailWidth, Top = 0, Width = 1, BackColor = Theme.BorderStrong };
         // One pixel wide and the full height of the window, so it stands in the top and bottom rings
         // the same way the rail stands in the left one — a single dead column the edge cannot be
         // grabbed by, right where a mouse crossing the top edge is likely to be.
@@ -94,6 +91,7 @@ public sealed class CompanionShell : Form
         // Top right, clear of the right ring — see ShellFrame.CloseGlyphLeft for why the two must not
         // overlap. Left is set in LayoutChrome, against the current client width.
         _closeGlyph = Theme.CreateCloseGlyph(Close);
+        _closeGlyph.Name = "CloseGlyph";
         _closeGlyph.Top = 12;
 
         var logoBox = new PictureBox
@@ -141,7 +139,7 @@ public sealed class CompanionShell : Form
         Theme.StyleLabel(_subtitleLabel, dim: true);
         Theme.MakeDragHandle(_subtitleLabel, this);
 
-        _headerDivider = new Panel { Left = ContentLeft, Top = 78, Height = 1, BackColor = Theme.AccentDim };
+        _headerDivider = new Panel { Name = "HeaderDivider", Left = ContentLeft, Top = 78, Height = 1, BackColor = Theme.AccentDim };
 
         var navTop = 72;
         foreach (var screen in screens)
@@ -339,9 +337,9 @@ public sealed class CompanionShell : Form
 }
 
 /// <summary>
-/// The frame's geometry decisions, kept out of CompanionShell so they can be tested without
-/// constructing a Form — see HistoryExportPlanner's own remarks on why nothing else there has
-/// automated coverage.
+/// The frame's geometry decisions, kept out of CompanionShell so every case of them can be
+/// enumerated cheaply, without a window (see ShellFrameTests). The wiring that connects them to real
+/// controls needs one and has one — see CompanionShellFormTests.
 /// </summary>
 public static class ShellFrame
 {

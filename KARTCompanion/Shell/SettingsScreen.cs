@@ -443,8 +443,9 @@ public sealed class SettingsScreen : IScreen
 
 /// <summary>
 /// The wording decisions behind SettingsScreen's status card, pulled out so they can be tested
-/// without constructing a Form — see HistoryExportPlanner's own remarks on why nothing else there
-/// has automated coverage.
+/// without constructing a Form — a decision with no control in it is cheaper to enumerate every case
+/// of than one with. That the screen lays its action row out from these is pinned against a real
+/// window in CompanionShellFormTests.
 /// </summary>
 public static class SettingsScreenText
 {
@@ -452,9 +453,9 @@ public static class SettingsScreenText
     public const int ActionRowBottomMargin = 40;
 
     /// <summary>Where the action row's top edge goes, given the view's height and how tall a button
-    /// actually is. Pure so the arithmetic is testable — nothing in this suite constructs a Form, and
-    /// a review found the previous version guessing a row height of 30 against buttons Theme builds
-    /// 34 tall, which no test could notice.</summary>
+    /// actually is. Pure so the arithmetic is testable on its own — a review found the previous
+    /// version guessing a row height of 30 against buttons Theme builds 34 tall, which no test could
+    /// notice at the time.</summary>
     public static int ActionRowTop(int viewHeight, int buttonHeight) =>
         viewHeight - ActionRowBottomMargin - buttonHeight;
 

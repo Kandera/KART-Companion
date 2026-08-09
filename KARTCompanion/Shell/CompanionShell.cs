@@ -184,6 +184,11 @@ public sealed class CompanionShell : Form
             // A screen's View covers the entire client area, so it would otherwise swallow every
             // hit-test the frame's edges need (see FrameEdgePassThrough).
             FrameEdgePassThrough.Attach(screen.View, this);
+            // KNOWN-EQUIVALENT, and recorded so it is not silently rediscovered: forcing this to
+            // `true` changes nothing. SwitchTo(Current) runs at the end of this constructor and sets
+            // every screen's view again, and nothing has painted in between — the window has not been
+            // shown. The line that decides which screen is seen is the one in SwitchTo, and that one
+            // is pinned (OnlyTheCurrentScreensView_IsShown_AndTheRailSwitchesWhichOne).
             screen.View.Visible = screen == Current;
             screen.StatusChanged += (_, _) => { if (screen == Current) UpdateRailStatusDot(); };
             Controls.Add(screen.View);

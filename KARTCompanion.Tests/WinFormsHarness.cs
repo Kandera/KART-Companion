@@ -8,13 +8,25 @@ namespace KARTCompanion.Tests;
 /// The one way this suite runs a test against real WinForms controls, and the only place any of the
 /// mechanics live.
 ///
-/// Three things have to be true before a Form can be asserted about from a test, and xUnit gives
-/// none of them:
+/// Three things are done before a Form is asserted about, and xUnit gives none of them. TWO OF THE
+/// THREE ARE NOT PINNED BY THIS SUITE — measured under mutation, not assumed, and written down here
+/// rather than left as three equally load-bearing-looking claims. "Not pinned" is not "removable":
+/// each says below why it is still the right thing to do.
 ///
-/// 1. <b>An STA thread.</b> xUnit's runner threads are MTA. Every WinForms control ultimately hosts
-///    OLE/COM (drag-drop, the clipboard, common dialogs) and refuses to be created off an STA
-///    thread, so the body runs on a thread of its own with <see cref="ApartmentState.STA"/> set
-///    before it starts — the only moment it can be set.
+/// 1. <b>An STA thread.</b> xUnit's runner threads are MTA. A WinForms control that hosts OLE/COM —
+///    drag-drop, the clipboard, the common file dialogs — refuses to be created off an STA thread,
+///    so the body runs on a thread of its own with <see cref="ApartmentState.STA"/> set before it
+///    starts, the only moment it can be set.
+///
+///    NOT PINNED, MEASURED: deleting the <c>SetApartmentState</c> call below leaves every test in
+///    this suite green. Nothing these tests build reaches COM today — Forms, Panels, Labels,
+///    Buttons, PictureBoxes and ListViews all get their windows perfectly happily from an MTA
+///    thread. It stays because the day one of them DOES (the settings screen's Browse button is one
+///    <c>ShowDialog</c> away from being exactly that) the failure would arrive as an
+///    InvalidOperationException in whichever unrelated test happened to touch it, and because a
+///    host that runs the product's windows in a different apartment from the product is testing a
+///    different program. The mutant that removes it goes unnoticed; that is a gap in the suite, not
+///    a licence.
 ///
 /// 2. <b>Real handles.</b> A control with no HWND has no client size, no border, no scrollbars and
 ///    no window procedure: its layout answers are the constructor's guesses, not Windows'. Nothing
@@ -24,6 +36,17 @@ namespace KARTCompanion.Tests;
 ///    never been shown (it returns early for an invisible control), and actually showing a window
 ///    would put one on whoever is running the tests' desktop and make the result depend on what else
 ///    is on screen.
+///
+///    NOT PINNED, MEASURED: making <see cref="RealiseHandles"/> stop RECURSING — realise the root
+///    and nothing under it — also leaves every test in this suite green. The controls these tests
+///    reach deep into are reached through helpers that touch <see cref="Control.Handle"/> on the way
+///    past (the WS_VISIBLE reads and the hit-test sends in CompanionShellFormTests both do), so they
+///    get their windows on demand and the walk has nothing left to do for them. The recursion stays
+///    because that is a property of today's assertions and not of the tree: the shell keeps every
+///    screen's view alive and hides all but one, WinForms gives an invisible child no window of its
+///    own, and the first assertion written against a nested control WITHOUT going through one of
+///    those helpers would be reading the constructor's guesses instead of Windows' answers — and
+///    would pass.
 ///
 /// 3. <b>A failure that reads as a failure.</b> An exception on a thread nobody joins is a silently
 ///    passing test, and a body that blocks is a run that never ends. The body's exception is
@@ -35,6 +58,27 @@ namespace KARTCompanion.Tests;
 ///    whichever way they arise; they are collected separately and rethrown by the same code. See
 ///    the two lines at the top of <see cref="Run{T}"/> for why, and for what those two lines cost if
 ///    either of them is removed.
+///
+///    WHAT OF THIS IS PINNED: the capture-and-rethrow of a body exception, of a POSTED
+///    window-procedure exception, of a SYNCHRONOUS one, and of both at once, are each pinned by a
+///    test in WinFormsHarnessTests. THREE THINGS AROUND THEM ARE NOT, all measured:
+///
+///      * <see cref="BodyTimeout"/> is never enforced. No body in this suite hangs, so the
+///        <c>Join</c> below always returns true and the TimeoutException is never constructed:
+///        replacing the whole guard with an unbounded <c>thread.Join()</c> leaves every test green.
+///        A test of it would have to hang on purpose for a real minute, which buys less than it
+///        costs; the guard stays because the failure it replaces is a run that never returns, and a
+///        CI job that has to be cancelled by hand reports nothing at all.
+///      * The <c>??=</c> in <c>Collect</c> — which of TWO window-procedure exceptions is the one
+///        reported — is unpinned: turning it into a plain <c>=</c>, so the LAST wins instead of the
+///        first, leaves every test green. No test raises two, and the first is the better default
+///        (the second is usually its consequence), so this is a choice recorded rather than a
+///        mechanism verified.
+///      * The unsubscribe in the <c>finally</c> is unpinnable from here: removing it leaves every
+///        test green and always will, because <see cref="Application.ThreadException"/> is
+///        per-thread and every <see cref="Run{T}"/> gets a fresh thread that dies immediately after.
+///        It is belt and braces against a future in which a body is run on a thread that outlives
+///        it. Keep it; there is nothing to chase.
 /// </summary>
 public static class WinFormsHarness
 {
@@ -86,9 +130,29 @@ public static class WinFormsHarness
                 //     that means a ThreadExceptionDialog — the box with Continue/Quit — waiting for
                 //     a click no unattended run will ever give it, and a GREEN test when it comes.
                 //     A subscriber suppresses that dialog unconditionally, so Collect below is the
-                //     line that must never be removed; it is also what makes a mutant of the mode
-                //     line above safe to build and run at all, which the ThrowException version was
-                //     not.
+                //     line that must never be removed.
+                //
+                // NEITHER LINE IS PINNED BY A TEST, and the mode line cannot be. Its three values
+                // give two behaviours, MEASURED on .NET 8 by reading NativeWindow's own
+                // WndProcShouldBeDebuggable on a thread with each mode set:
+                //
+                //     CatchException  -> False        Automatic -> False        ThrowException -> True
+                //
+                // So CatchException -> Automatic is an EQUIVALENT mutant — it installs the same
+                // window procedure, and the whole suite stays green with it, correctly. The only
+                // distinguishable mutant is ThrowException, and the paragraph above is what it
+                // costs: a synchronous send takes the test host down with it, so the only way to
+                // "kill" it is to kill the run, which is not a red test and must not be produced on
+                // purpose. An earlier version of this comment claimed the subscriber below was what
+                // made a mutant of this line safe to run at all; that is not true of the one mutant
+                // that changes anything, and the safe one changes nothing.
+                //
+                // The Collect subscription IS exercised: three tests in WinFormsHarnessTests pass
+                // only because what it captured is what gets rethrown. It still cannot be MUTATED
+                // AND RUN, for the opposite reason to the mode line — with no subscriber the first
+                // window-procedure exception opens a modal dialog on whoever is running the tests'
+                // desktop and parks the STA thread there until BodyTimeout expires. Reason about
+                // that one; do not measure it.
                 //
                 // Together: both kinds of window-procedure exception become an ordinary red test
                 // with the original stack, and nothing can put a window on anyone's screen.
@@ -205,6 +269,15 @@ public static class WinFormsHarness
     ///
     /// It fails loudly if the framework ever renames what it reaches for, rather than quietly
     /// testing nothing.
+    ///
+    /// WHEN IT WILL FAIL, AND IT IS NOT AN ACCIDENT: a bump to .NET 9 reddens this on day one.
+    /// System.Windows.Forms.DpiHelper is renamed ScaleHelper there and its DeviceDpi property becomes
+    /// InitialSystemDpi, so the field lookup below finds nothing and every test that scales the
+    /// display fails with the explanation above. That is the designed behaviour and the price of the
+    /// reach — a silent "cannot simulate scaling any more" would leave those tests passing while
+    /// asserting nothing. Budget the rename as part of the framework bump: point ProcessDpiField at
+    /// ScaleHelper's backing field and re-run, or accept the tests as vacuous and say so where they
+    /// live. Do not delete the guard.
     /// </summary>
     public static void WithSystemDpiOf(int dpi, Action body)
     {
@@ -253,7 +326,12 @@ public static class WinFormsHarness
 
     /// <summary>What is subscribed to one of Control's events, read out of the EventHandlerList it
     /// keeps them in. Private framework members, so this fails loudly rather than answering "nothing
-    /// is subscribed" — which every caller above would read as a real finding.</summary>
+    /// is subscribed" — which every caller above would read as a real finding.
+    ///
+    /// The same standing cost as WithSystemDpiOf, and the same answer: Control.s_mouseDownEvent,
+    /// Control.s_clickEvent and Component.Events are three more private members a framework bump can
+    /// rename out from under this suite. Four reaches in total, all guarded, all loud. Expect to fix
+    /// them the day the target framework moves rather than to be surprised by them.</summary>
     private static Delegate? HandlerFor(Control control, string eventKeyField)
     {
         var key = typeof(Control).GetField(eventKeyField, BindingFlags.NonPublic | BindingFlags.Static);

@@ -597,11 +597,11 @@ public class CompanionShellFormTests
     /// A display layout that does not exist on whatever machine is running this — the seam the two
     /// tests below are built on (see CompanionShell's <c>workingAreaOf</c> parameter).
     ///
-    /// It answers the one question the shell asks about the display, the way
-    /// <see cref="Screen.FromRectangle"/> answers it: the screen a rectangle overlaps most, and the
-    /// FIRST of them when it overlaps none. That "overlaps most" is not decoration — it is the whole
-    /// defect the shell's MinimumSize override exists for, and a layout that answered by position
-    /// alone could not tell the window's own rectangle apart from the oversized one being proposed.
+    /// It answers the one question the shell asks about the display the way
+    /// <see cref="Screen.FromRectangle"/> answers it: with the screen a rectangle OVERLAPS MOST. That
+    /// is not decoration — it is the whole defect the shell's MinimumSize override exists for, and a
+    /// layout that answered by position alone could not tell the window's own rectangle apart from
+    /// the oversized one being proposed.
     ///
     /// Nothing here is a spy: both tests below assert about the size the shell ends up with, so a
     /// layout that always gave the same answer would fail one of them (the first expects the tight
@@ -609,13 +609,17 @@ public class CompanionShellFormTests
     /// </summary>
     private sealed class InventedScreens
     {
+        /// <summary>Bigger than any minimum these tests hand the shell, so clamping against it is a
+        /// no-op. See WorkingAreaOf for when it is used and why it has to be a no-op.</summary>
+        private static readonly Size RoomForAnything = new(100_000, 100_000);
+
         private readonly (Rectangle Bounds, Size WorkingArea)[] _screens;
 
         public InventedScreens(params (Rectangle Bounds, Size WorkingArea)[] screens) => _screens = screens;
 
         public Size WorkingAreaOf(Rectangle rectangle)
         {
-            var best = _screens[0];
+            (Rectangle Bounds, Size WorkingArea)? best = null;
             var mostOverlap = 0L;
             foreach (var screen in _screens)
             {
@@ -624,7 +628,14 @@ public class CompanionShellFormTests
                 if (overlap > mostOverlap) { mostOverlap = overlap; best = screen; }
             }
 
-            return best.WorkingArea;
+            // A rectangle on none of these is not hypothetical and is not the test's doing: WinForms
+            // places the window itself (StartPosition.CenterScreen) as its handle is created, and
+            // that first position is somewhere on the REAL desktop — MEASURED, it is where the shell
+            // is asked its first question, before any test has said anything. Answering with room
+            // enough for anything is the only answer that leaves the minimum where the constructor
+            // put it. It cannot make a test pass for the wrong reason either: both tests below expect
+            // an EXACT size, and a lookup that fell through to this would produce neither of them.
+            return best?.WorkingArea ?? RoomForAnything;
         }
     }
 
@@ -634,7 +645,6 @@ public class CompanionShellFormTests
     /// the MinimumSize override). Numbers this small are under that on any machine, so what comes
     /// back is the shell's clamp and nothing else.</summary>
     private static InventedScreens TwoScreens() => new(
-        // First, so it is also the fallback for a rectangle that overlaps neither.
         (new Rectangle(0, 0, 400, 200), new Size(400, 200)),
         (new Rectangle(400, 0, 600, 480), new Size(600, 480)));
 
@@ -691,6 +701,12 @@ public class CompanionShellFormTests
             shell.Location = new Point(400, 0);
             WinFormsHarness.Pump();
 
+            // An override of OnLocationChanged that does not call base swallows the event for
+            // everyone else on the window. Nothing subscribes to it in the application today, which
+            // is exactly why it would be found by whoever first did.
+            var moves = 0;
+            shell.LocationChanged += (_, _) => moves++;
+
             // Fits the roomy screen in both dimensions, and is too tall for the tight one.
             shell.MinimumSize = new Size(380, 300);
             WinFormsHarness.Pump();
@@ -707,6 +723,10 @@ public class CompanionShellFormTests
             // Only the height had to give: the width already fitted, and clamping it too would be
             // taking room away for no reason.
             Assert.Equal(new Size(380, 200), shell.MinimumSize);
+
+            // At least, rather than exactly: both moves above have to be reported, and Windows is
+            // free to raise more of its own.
+            Assert.True(moves >= 2, $"Both moves should have been announced; {moves} were.");
         }, TwoScreens().WorkingAreaOf);
     }
 

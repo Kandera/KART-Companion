@@ -30,7 +30,9 @@ namespace KARTCompanion.Tests;
 ///    <see cref="ExceptionDispatchInfo"/> — so xUnit reports the original exception, message and
 ///    stack, exactly as if it had been thrown inline — and a body that outstays
 ///    <see cref="BodyTimeout"/> fails the test with a <see cref="TimeoutException"/> instead of
-///    hanging the run.
+///    hanging the run. There are TWO ways an exception can arise here and only one of them travels
+///    up the stack: see the UnhandledExceptionMode call in <see cref="Run{T}"/> for the other, which
+///    WinForms answers with a dialog box and a green test unless it is switched off.
 /// </summary>
 public static class WinFormsHarness
 {
@@ -52,6 +54,21 @@ public static class WinFormsHarness
         {
             try
             {
+                // BEFORE any window exists on this thread, and it is not optional.
+                //
+                // WinForms wraps its own message dispatch in a catch: an exception thrown inside a
+                // window procedure while Pump() is running does not travel up to the catch below, it
+                // is handed to Application.ThreadException, whose default handler puts a
+                // ThreadExceptionDialog on screen — the ".NET error" box with Continue/Quit — and
+                // then carries on. The test host waits for a click that no CI machine and no
+                // unattended run will ever give it, and when it comes the test reports GREEN,
+                // because nothing ever reached the harness.
+                //
+                // That is the exact failure this class exists to prevent, arriving through the one
+                // door it did not watch. ThrowException makes the message loop rethrow instead, so
+                // the catch below sees it and xUnit prints it. Per-thread scope, and each Run() gets
+                // a fresh thread, so this can never race a window that already exists.
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException, threadScope: true);
                 result = body();
             }
             catch (Exception ex)

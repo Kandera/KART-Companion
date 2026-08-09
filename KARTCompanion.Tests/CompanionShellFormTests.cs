@@ -29,6 +29,25 @@ public class CompanionShellFormTests
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
+    private const int GWL_STYLE = -16;
+    private const int WS_VISIBLE = 0x10000000;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll")]
+    private static extern bool DestroyIcon(IntPtr handle);
+
+    /// <summary>Whether Windows has this control's OWN window marked as shown.
+    ///
+    /// Not <see cref="Control.Visible"/>, which cannot answer this here: it reports whether the
+    /// control would actually be on screen, so inside a form that has never been shown EVERY control
+    /// reads false and the switch this is about is invisible to it. WS_VISIBLE is the control's own
+    /// bit, set from its own requested visibility whether or not its parents are showing —
+    /// MEASURED, in both directions, through a switch on a form that is never shown.</summary>
+    private static bool IsShown(Control control) =>
+        (GetWindowLong(control.Handle, GWL_STYLE) & WS_VISIBLE) != 0;
+
     /// <summary>Asks a control's REAL window procedure what it makes of a point, the same question
     /// Windows asks while deciding what the mouse is over. Sent straight to the target rather than
     /// left to Windows' own walk down the z-order, so the answer is about that one control and does
@@ -47,6 +66,7 @@ public class CompanionShellFormTests
         SettingsScreen? settings = null;
         HistoryScreen? history = null;
         Bitmap? logo = null;
+        Icon? trayIcon = null;
         try
         {
             WinFormsHarness.WithForm(
@@ -57,8 +77,8 @@ public class CompanionShellFormTests
                     history = new HistoryScreen(
                         Array.Empty<ArchivedAward>(), () => new ArchiveDocument(), _ => { });
                     logo = AppIcon.LoadLogoBitmap();
-                    return new CompanionShell(
-                        new IScreen[] { settings, history }, logo, AppIcon.CreateTrayIcon(logo));
+                    trayIcon = AppIcon.CreateTrayIcon(logo);
+                    return new CompanionShell(new IScreen[] { settings, history }, logo, trayIcon);
                 },
                 shell => assertions(shell, settings!, history!));
         }
@@ -66,8 +86,32 @@ public class CompanionShellFormTests
         {
             // After the form, which holds it as a PictureBox image.
             logo?.Dispose();
+            // AppIcon.CreateTrayIcon hands back Icon.FromHandle(bitmap.GetHicon()) and says so:
+            // production makes exactly ONE of these for the whole process and deliberately never
+            // destroys the HICON. Every test in this file makes another, so each is released here.
+            // Icon.FromHandle does not take ownership, so disposing the Icon alone would leak the
+            // handle it wraps — the handle is destroyed explicitly, after the form that held it.
+            if (trayIcon is not null)
+            {
+                var handle = trayIcon.Handle;
+                trayIcon.Dispose();
+                DestroyIcon(handle);
+            }
         }
     }
+
+    /// <summary>The chrome the frame owns: everything that is not a screen's own content. Named
+    /// controls, so this asks about the six the shell actually builds rather than about whatever
+    /// happens to be the right shape.</summary>
+    private static Control[] ChromeOf(CompanionShell shell) => new[]
+    {
+        WinFormsHarness.Find<Panel>(shell, "Rail"),
+        WinFormsHarness.Find<Panel>(shell, "RailDivider"),
+        WinFormsHarness.Find<Label>(shell, "Title"),
+        WinFormsHarness.Find<Label>(shell, "Subtitle"),
+        WinFormsHarness.Find<Panel>(shell, "HeaderDivider"),
+        WinFormsHarness.Find<Control>(shell, "CloseGlyph"),
+    };
 
     // The shell's own content column: the rail is 64 wide, the content starts 16 past it, and 12 is
     // left at the right. Private constants in CompanionShell, so they are literals here — a test
@@ -88,6 +132,16 @@ public class CompanionShellFormTests
             var rail = WinFormsHarness.Find<Panel>(shell, "Rail");
             var railDivider = WinFormsHarness.Find<Panel>(shell, "RailDivider");
             var headerDivider = WinFormsHarness.Find<Panel>(shell, "HeaderDivider");
+            var statusDot = WinFormsHarness.Find<Panel>(shell, "RailStatusDot");
+            var title = WinFormsHarness.Find<Label>(shell, "Title");
+            var subtitle = WinFormsHarness.Find<Label>(shell, "Subtitle");
+
+            // The rail's own width, which everything in the content column is measured from and which
+            // nothing else here asserts: the header divider and the buttons agree with it through
+            // ContentLeft, so widening the rail alone moves them all and no test notices.
+            Assert.Equal(64, rail.Width);
+
+            var gapsUnderTheStatusDot = new List<int>();
 
             foreach (var size in new[] { new Size(1200, 820), new Size(980, 520), new Size(1042, 700) })
             {
@@ -96,7 +150,175 @@ public class CompanionShellFormTests
 
                 Assert.Equal(size.Height, rail.Height);
                 Assert.Equal(size.Height, railDivider.Height);
-                Assert.Equal(size.Width - ContentLeft - RightMargin, headerDivider.Width);
+
+                // Left as well as width. The divider spans the content column exactly — from where
+                // the content starts to the right margin — and a divider that starts anywhere else is
+                // a line drawn across the rail, which asserting its width alone cannot see.
+                Assert.Equal(ContentLeft, headerDivider.Left);
+                Assert.Equal(size.Width - RightMargin, headerDivider.Right);
+                // And it is UNDER the header text rather than through it. Its Top is the other
+                // number nothing asserted.
+                Assert.True(headerDivider.Top >= Math.Max(title.Bottom, subtitle.Bottom),
+                    $"The header divider is drawn through the header text: divider top {headerDivider.Top}, "
+                    + $"title bottom {title.Bottom}, subtitle bottom {subtitle.Bottom}.");
+
+                // The status dot rides the BOTTOM of the rail, so it keeps the same gap below it at
+                // every window height. Stated as "the same gap", not as the constant that produces
+                // it, so a literal Top cannot satisfy it at more than one size.
+                gapsUnderTheStatusDot.Add(rail.Height - statusDot.Bottom);
+                Assert.True(statusDot.Top >= 0 && statusDot.Bottom <= rail.Height,
+                    $"The rail's status dot is outside the rail at {size}: dot {statusDot.Bounds}, rail height {rail.Height}.");
+            }
+
+            Assert.True(gapsUnderTheStatusDot.Distinct().Count() == 1,
+                "The rail's status dot does not follow the rail's bottom edge — the gap below it came out as "
+                + string.Join(", ", gapsUnderTheStatusDot) + " at the three window heights.");
+        });
+    }
+
+    // --- the chrome's z-order ---
+
+    // Each screen's View is added to the form BEFORE the chrome and covers the entire client area,
+    // and Controls.Add appends to the BACK of the z-order (index 0 is the FRONT). Without the
+    // BringToFront pass at the end of the constructor the rail, the rail divider, the title, the
+    // subtitle, the header divider and the close button all sit behind a view that covers them: the
+    // window opens with no rail, no logo, no nav icons, no title and no way to close it, while every
+    // one of those controls is present, visible and correctly sized.
+    //
+    // That is the same defect the empty-state label shipped one level down (see
+    // HistoryScreenFormTests), one level up the tree. No test that sends a message to a control's own
+    // window can see it: a SendMessage straight to a target is z-order-blind by construction, which
+    // is exactly why the resize-ring test below cannot stand in for this one.
+    [WinFormsFact]
+    public void EveryPieceOfChrome_StandsInFrontOfTheScreenViewsThatCoverIt()
+    {
+        WithShell((shell, settings, history) =>
+        {
+            // The premise, restated here rather than assumed: the views really do cover the whole
+            // window, so anything behind one of them is invisible.
+            foreach (var view in new[] { settings.View, history.View })
+                Assert.Equal(shell.ClientSize, view.Size);
+
+            var frontmostView = new[] { settings.View, history.View }.Min(v => shell.Controls.GetChildIndex(v));
+
+            foreach (var chrome in ChromeOf(shell))
+            {
+                Assert.True(shell.Controls.GetChildIndex(chrome) < frontmostView,
+                    $"\"{chrome.Name}\" is behind a screen's view, which covers the whole window, so it is "
+                    + $"painted over and the window opens without it: {chrome.Name} at z-index "
+                    + $"{shell.Controls.GetChildIndex(chrome)}, the frontmost view at {frontmostView} "
+                    + "(index 0 is the front).");
+            }
+        });
+    }
+
+    // --- one screen at a time ---
+
+    // Both views are kept alive for the life of the window and all but the current one is hidden. If
+    // that switch is ever lost, both are shown at once and whichever is in front is painted over the
+    // other — the same "everything is there and none of it can be seen" defect as the z-order above.
+    //
+    // Asked of Windows rather than of Control.Visible, which cannot answer inside a form that has
+    // never been shown: see IsShown.
+    [WinFormsFact]
+    public void OnlyTheCurrentScreensView_IsShown_AndTheRailSwitchesWhichOne()
+    {
+        WithShell((shell, settings, history) =>
+        {
+            Assert.Same(settings, shell.Current);
+            Assert.True(IsShown(settings.View), "The screen the window opens on is not shown.");
+            Assert.False(IsShown(history.View),
+                "Both screens are shown at once, so one of them is painted over the other.");
+
+            var navIcons = WinFormsHarness.Descendants(WinFormsHarness.Find<Panel>(shell, "Rail"))
+                .Where(c => c.Name == "NavIcon").ToList();
+            Assert.Equal(2, navIcons.Count);
+
+            // One icon per screen, in the order the screens were given to the shell.
+            WinFormsHarness.RaiseClick(navIcons[1]);
+            WinFormsHarness.Pump();
+
+            Assert.Same(history, shell.Current);
+            Assert.True(IsShown(history.View), "The screen just navigated to is not shown.");
+            Assert.False(IsShown(settings.View), "The screen navigated away from is still shown behind the new one.");
+        });
+    }
+
+    // --- the window's own shape ---
+
+    // FormBorderStyle.None leaves no OS-drawn edge, so the rounded card the mockup asks for is a
+    // Region on the form (Theme.ApplyRoundedFormRegion) — without it the window has hard right-angled
+    // corners against the desktop. The Region is rebuilt on every Resize, which since the window
+    // became draggable by its edges is every frame of a live drag, so this asks at the size the
+    // window has been dragged to and not only at the one it opened with.
+    [WinFormsFact]
+    public void TheWindow_IsRoundedAtWhateverSizeItHasBeenDraggedTo()
+    {
+        WithShell((shell, _, _) =>
+        {
+            foreach (var size in new[] { new Size(1200, 820), new Size(980, 520) })
+            {
+                shell.ClientSize = size;
+                WinFormsHarness.Pump();
+
+                var region = shell.Region;
+                Assert.True(region is not null, "The window has no Region, so its corners are square.");
+
+                Assert.False(region!.IsVisible(new Point(0, 0)),
+                    "The window's top-left corner pixel is part of the window, so the corner is square.");
+                Assert.False(region.IsVisible(new Point(size.Width - 1, size.Height - 1)),
+                    "The window's bottom-right corner pixel is part of the window, so the corner is square.");
+
+                // And the shape is the size the window is NOW: a Region applied once and never
+                // rebuilt would clip away everything past the size the window opened at.
+                Assert.True(region.IsVisible(new Point(size.Width / 2, size.Height - 1)),
+                    $"The middle of the window's bottom edge is outside its own Region at {size}, so the "
+                    + "rounded shape is a stale one from an earlier size.");
+                Assert.True(region.IsVisible(new Point(size.Width - 1, size.Height / 2)),
+                    $"The middle of the window's right edge is outside its own Region at {size}, so the "
+                    + "rounded shape is a stale one from an earlier size.");
+            }
+        });
+    }
+
+    // --- what the window can be dragged by ---
+
+    // FormBorderStyle.None removes the title bar a window is normally moved by, so every inert thing
+    // on the frame is wired up as one (Theme.MakeDragHandle). A child control eats the mouse before
+    // its parent ever sees it, so each of these is a strip the window CANNOT be moved by if its own
+    // handle is missing — which is exactly how the rail once ended up movable only in the bare gaps
+    // between its children.
+    [WinFormsFact]
+    public void EveryInertPieceOfChrome_IsADragHandle_AndTheNavIconsDeliberatelyAreNot()
+    {
+        WithShell((shell, _, _) =>
+        {
+            var rail = WinFormsHarness.Find<Panel>(shell, "Rail");
+
+            var inert = new List<Control>
+            {
+                rail,
+                WinFormsHarness.Find<PictureBox>(shell, "LogoBox"),
+                WinFormsHarness.Find<Panel>(shell, "RailStatusDot"),
+                WinFormsHarness.Find<Label>(shell, "Title"),
+                WinFormsHarness.Find<Label>(shell, "Subtitle"),
+            };
+            inert.AddRange(WinFormsHarness.Descendants(rail).Where(c => c.Name == "NavAccent"));
+            Assert.Equal(7, inert.Count);
+
+            foreach (var control in inert)
+            {
+                Assert.True(WinFormsHarness.IsADragHandle(control),
+                    $"\"{control.Name}\" is not a drag handle, so it is a dead strip of the frame the window "
+                    + "cannot be moved by, with nothing on screen to say so.");
+            }
+
+            // And the nav icons are not, deliberately: they have a click of their own, and a drag
+            // handle on top of it would start a window move on every press of them.
+            foreach (var icon in WinFormsHarness.Descendants(rail).Where(c => c.Name == "NavIcon"))
+            {
+                Assert.False(WinFormsHarness.IsADragHandle(icon),
+                    "A nav icon is a drag handle, so pressing it starts moving the window instead of navigating.");
             }
         });
     }
@@ -268,8 +490,8 @@ public class CompanionShellFormTests
             WinFormsHarness.Pump();
 
             // The invariant, not an exact size: WinForms applies a constraint of its own on top of
-            // this one (to the screen's bounds, less two pixels), and pinning the arithmetic of two
-            // clamps stacked would be pinning WinForms' half of it.
+            // this one (to a working area, less two pixels — measured, see the MinimumSize override),
+            // and pinning the arithmetic of two clamps stacked would be pinning WinForms' half of it.
             var nowOn = Screen.FromRectangle(shell.Bounds).WorkingArea.Size;
             Assert.True(
                 shell.MinimumSize.Width <= nowOn.Width && shell.MinimumSize.Height <= nowOn.Height,

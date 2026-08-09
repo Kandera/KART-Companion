@@ -73,9 +73,10 @@ public sealed class CompanionShell : Form
         // Icon rail: a narrow navigation-style column separating the logo/nav glance from the
         // screen's own fields. Height tracks the window's own (see LayoutChrome), so it follows a
         // resize.
-        // Named, like the other three pieces of chrome below: they are the controls the frame's own
-        // tests have to find, and a test that identifies chrome by "the child Panel that happens to
-        // be one pixel wide" starts asserting about a different control the day someone adds one.
+        // Named, like every other piece of chrome in this constructor: they are the controls the
+        // frame's own tests have to find, and a test that identifies chrome by "the child Panel that
+        // happens to be one pixel wide" starts asserting about a different control the day someone
+        // adds one.
         _rail = new Panel { Name = "Rail", Left = 0, Top = 0, Width = RailWidth };
         Theme.StylePanel(_rail, Theme.RailBackground);
         Theme.MakeDragHandle(_rail, this);
@@ -96,6 +97,7 @@ public sealed class CompanionShell : Form
 
         var logoBox = new PictureBox
         {
+            Name = "LogoBox",
             Image = logo,
             SizeMode = PictureBoxSizeMode.Zoom,
             Left = (RailWidth - 34) / 2,
@@ -115,6 +117,7 @@ public sealed class CompanionShell : Form
         // renders without knowing what "health" means for that screen (see IScreen). Position
         // tracks the rail's own height (see LayoutChrome), same as before.
         _railStatusDot = Theme.CreateStatusDot(Theme.TextDim);
+        _railStatusDot.Name = "RailStatusDot";
         _railStatusDot.Left = (RailWidth - _railStatusDot.Width) / 2;
         Theme.MakeDragHandle(_railStatusDot, this);
         _rail.Controls.Add(_railStatusDot);
@@ -124,6 +127,7 @@ public sealed class CompanionShell : Form
         // glyph's hitbox further right, which would swallow its clicks.
         var titleLabel = new Label
         {
+            Name = "Title",
             Text = "KART Companion",
             Left = ContentLeft,
             Top = 20,
@@ -135,7 +139,7 @@ public sealed class CompanionShell : Form
 
         // Subtitle mirrors whichever screen is current (e.g. "Settings") instead of a fixed
         // string, since the shell itself is generic across screens.
-        _subtitleLabel = new Label { Left = ContentLeft, Top = 47, AutoSize = true };
+        _subtitleLabel = new Label { Name = "Subtitle", Left = ContentLeft, Top = 47, AutoSize = true };
         Theme.StyleLabel(_subtitleLabel, dim: true);
         Theme.MakeDragHandle(_subtitleLabel, this);
 
@@ -145,6 +149,7 @@ public sealed class CompanionShell : Form
         foreach (var screen in screens)
         {
             var navIcon = Theme.CreateIcon(screen.Glyph, Theme.Text, 16);
+            navIcon.Name = "NavIcon";
             navIcon.Left = (RailWidth - navIcon.Width) / 2;
             navIcon.Top = navTop;
             navIcon.Cursor = Cursors.Hand;
@@ -153,7 +158,7 @@ public sealed class CompanionShell : Form
             // The bar marking the current screen has no click of its own, so it is a drag handle too
             // (see the logo above). Without it, the strip beside every nav icon was a dead spot the
             // window could not be moved by.
-            var accentBar = new Panel { Left = navIcon.Left - 12, Top = navIcon.Top - 1, Width = 3, Height = 18, BackColor = Theme.Accent };
+            var accentBar = new Panel { Name = "NavAccent", Left = navIcon.Left - 12, Top = navIcon.Top - 1, Width = 3, Height = 18, BackColor = Theme.Accent };
             Theme.MakeDragHandle(accentBar, this);
 
             _rail.Controls.Add(accentBar);
@@ -265,11 +270,27 @@ public sealed class CompanionShell : Form
     /// Every minimum this window is ever given, cut down to the working area of the screen it is on.
     ///
     /// The constructor sets a minimum in LOGICAL pixels and WinForms scales it with the display: the
-    /// 954 it comes to is about 1431 physical pixels at 150%. WinForms does constrain a minimum
-    /// itself on every assignment — including the one its own DPI scaling makes — but it constrains
-    /// it to the screen's BOUNDS, and the bounds are not where a window can live. On a 1366x768
-    /// display at 150% that leaves a minimum height of 738 against a working area of 720, so the
-    /// window still cannot be sized to sit above the taskbar, with nothing on screen to say why.
+    /// 954 it comes to is about 1431 physical pixels at 150%.
+    ///
+    /// WHAT WINFORMS ALREADY DOES, MEASURED: Form.MinimumSize's setter constrains every value it is
+    /// given — including the one its own DPI scaling assigns — to a WORKING AREA less two pixels, not
+    /// to the screen's bounds. Measured on a handled form inside the primary screen (bounds
+    /// 2560x1440, working area 2560x1392): a minimum height of 1400 came back as 1390, which is
+    /// working minus two. A bounds constraint would have left 1400 alone. So the taskbar case is
+    /// already covered by the framework, and an earlier version of this comment, and the commit
+    /// message that shipped with it, said the opposite of what the framework does.
+    ///
+    /// WHAT IT DOES NOT DO, which is why this override still earns its place:
+    ///
+    ///   * It measures against whichever screen the PROPOSED RECTANGLE overlaps most, which on more
+    ///     than one display is not the screen the window is on. A minimum big enough to span the
+    ///     desktop is therefore measured against a roomier screen than the one the user is looking
+    ///     at, and comes back still too big for it.
+    ///   * It never applies the constraint again when the window MOVES. A minimum that fitted the
+    ///     screen it was set on does not fit any more once the window has been dragged onto a smaller
+    ///     one — see OnLocationChanged below.
+    ///
+    /// Both are pinned by CompanionShellFormTests, and both go red without this override.
     ///
     /// A property override rather than a hook on OnDpiChanged/OnHandleCreated because the scaling
     /// arrives as an ASSIGNMENT to this property, whoever makes it and whenever: catching it here
@@ -281,6 +302,13 @@ public sealed class CompanionShell : Form
     /// Shrinking only, and safe to shrink: the list survives being narrower than its minimum — Item
     /// clamps and the list scrolls sideways (see HistoryListLayout) — so a window smaller than its
     /// content wants is a usable window, and one that cannot be made to fit its own screen is not.
+    ///
+    /// KNOWN, AND DELIBERATE: it never grows one back. Nothing remembers what the minimum was before
+    /// it was cut, so a window that visits a small screen keeps the smaller minimum for the rest of
+    /// the session even after it is dragged back to a large one. The cost is a window that can be
+    /// made smaller than its content would like — which the paragraph above says is usable — and the
+    /// alternative is a second stored size that has to be kept in step with the screens' own
+    /// minimums. Recorded rather than fixed; there is no test either way.
     /// </summary>
     public override Size MinimumSize
     {
@@ -353,6 +381,13 @@ public sealed class CompanionShell : Form
         public static void Attach(Control control, Form form)
         {
             var passThrough = new FrameEdgePassThrough(form);
+            // KNOWN-EQUIVALENT, and recorded so it is not silently rediscovered: dropping this line
+            // changes nothing on any path the shell uses. Every control Attach is called with here is
+            // attached inside the constructor, before anything has touched a Handle, so
+            // IsHandleCreated is false for all of them and the HandleCreated subscription below is
+            // what actually attaches. The line is kept because Attach is a general entry point — a
+            // screen builds its own View (see IScreen) and could hand over one that already has a
+            // window — not because any caller today needs it.
             if (control.IsHandleCreated) passThrough.AssignHandle(control.Handle);
             // A WinForms control can destroy and recreate its handle at any time (a BackColor change
             // is enough for some of them), which would leave this subclassing a handle that no longer
@@ -476,7 +511,8 @@ public static class ShellFrame
     ///
     /// The working area rather than the screen's bounds: the taskbar is not somewhere a window can be
     /// put, so a minimum height that only fits behind it is a minimum the user still cannot satisfy.
-    /// See CompanionShell.ClampMinimumSizeToScreen for when this runs.</summary>
+    /// See CompanionShell's MinimumSize override, and its OnLocationChanged, for when this runs and
+    /// for what WinForms already does on its own.</summary>
     public static Size ClampToWorkingArea(Size minimumSize, Size workingArea) => new(
         Math.Min(minimumSize.Width, workingArea.Width),
         Math.Min(minimumSize.Height, workingArea.Height));

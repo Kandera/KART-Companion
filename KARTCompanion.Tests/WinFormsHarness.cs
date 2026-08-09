@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Windows.Forms;
 
@@ -30,9 +31,10 @@ namespace KARTCompanion.Tests;
 ///    <see cref="ExceptionDispatchInfo"/> — so xUnit reports the original exception, message and
 ///    stack, exactly as if it had been thrown inline — and a body that outstays
 ///    <see cref="BodyTimeout"/> fails the test with a <see cref="TimeoutException"/> instead of
-///    hanging the run. There are TWO ways an exception can arise here and only one of them travels
-///    up the stack: see the UnhandledExceptionMode call in <see cref="Run{T}"/> for the other, which
-///    WinForms answers with a dialog box and a green test unless it is switched off.
+///    hanging the run. Exceptions raised inside a WINDOW PROCEDURE never reach that catch at all,
+///    whichever way they arise; they are collected separately and rethrown by the same code. See
+///    the two lines at the top of <see cref="Run{T}"/> for why, and for what those two lines cost if
+///    either of them is removed.
 /// </summary>
 public static class WinFormsHarness
 {
@@ -47,35 +49,65 @@ public static class WinFormsHarness
     /// <summary>Runs <paramref name="body"/> on a fresh STA thread and returns what it produced.</summary>
     public static T Run<T>(Func<T> body)
     {
-        ExceptionDispatchInfo? failure = null;
+        ExceptionDispatchInfo? fromTheBody = null;
+        ExceptionDispatchInfo? fromAWindowProcedure = null;
         var result = default(T)!;
 
         var thread = new Thread(() =>
         {
+            void Collect(object? _, ThreadExceptionEventArgs e) =>
+                fromAWindowProcedure ??= ExceptionDispatchInfo.Capture(e.Exception);
+
             try
             {
-                // BEFORE any window exists on this thread, and it is not optional.
+                // The two lines below run BEFORE any window exists on this thread, and NEITHER is
+                // optional.
                 //
-                // WinForms wraps its own message dispatch in a catch: an exception thrown inside a
-                // window procedure while Pump() is running does not travel up to the catch below, it
-                // is handed to Application.ThreadException, whose default handler puts a
-                // ThreadExceptionDialog on screen — the ".NET error" box with Continue/Quit — and
-                // then carries on. The test host waits for a click that no CI machine and no
-                // unattended run will ever give it, and when it comes the test reports GREEN,
-                // because nothing ever reached the harness.
+                // An exception thrown inside a window procedure does not reach the catch below. What
+                // happens to it instead is decided by these two lines, and the wrong pair of answers
+                // is what put ".NET error" dialogs on the maintainer's desktop and, later, crashed
+                // whole test runs:
                 //
-                // That is the exact failure this class exists to prevent, arriving through the one
-                // door it did not watch. ThrowException makes the message loop rethrow instead, so
-                // the catch below sees it and xUnit prints it. Per-thread scope, and each Run() gets
-                // a fresh thread, so this can never race a window that already exists.
-                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException, threadScope: true);
+                //   * WinForms' NativeWindow.Callback wraps every message it dispatches in a catch,
+                //     but only ARMS that catch when the unhandled-exception mode is CatchException.
+                //     Under ThrowException it installs the debuggable window procedure, which
+                //     rethrows. An exception raised by a POSTED callback then unwinds through
+                //     managed frames (DispatchMessage <- FPushMessageLoop <- Application.DoEvents)
+                //     and does reach the catch below — but a SYNCHRONOUS send does not: it unwinds
+                //     out of NativeWindow.Callback entered from native code (SetWindowPos and
+                //     friends), the CLR cannot cross that reverse-P/Invoke boundary, and the TEST
+                //     HOST DIES. No per-test attribution, and every other result in the run is lost.
+                //     `shell.ClientSize = ...`, `Location = ...`, Dispose(), handle creation and a
+                //     SendMessage all take that synchronous path, which is most of what the window
+                //     tests in this suite do.
+                //
+                //   * CatchException arms the catch, so WinForms hands the exception to
+                //     Application.ThreadException and the process stays alive. With NO subscriber
+                //     that means a ThreadExceptionDialog — the box with Continue/Quit — waiting for
+                //     a click no unattended run will ever give it, and a GREEN test when it comes.
+                //     A subscriber suppresses that dialog unconditionally, so Collect below is the
+                //     line that must never be removed; it is also what makes a mutant of the mode
+                //     line above safe to build and run at all, which the ThrowException version was
+                //     not.
+                //
+                // Together: both kinds of window-procedure exception become an ordinary red test
+                // with the original stack, and nothing can put a window on anyone's screen.
+                // Per-thread scope, and each Run() gets a fresh thread, so this can never race a
+                // window that already exists.
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException, threadScope: true);
+                Application.ThreadException += Collect;
+
                 result = body();
             }
             catch (Exception ex)
             {
                 // Captured rather than rethrown here: rethrowing on this thread would tear the test
                 // host down, and swallowing it would make the test pass.
-                failure = ExceptionDispatchInfo.Capture(ex);
+                fromTheBody = ExceptionDispatchInfo.Capture(ex);
+            }
+            finally
+            {
+                Application.ThreadException -= Collect;
             }
         })
         {
@@ -93,9 +125,22 @@ public static class WinFormsHarness
                 "a Show(), an Invoke back onto a thread nothing is pumping).");
         }
 
+        // Both are reported when both happened. A window-procedure exception does not stop the body
+        // — WinForms swallows it and the next statement runs — so a body that then failed an
+        // assertion of its own has TWO failures, and the one the harness collected is usually the
+        // cause of the other. Neither is dropped, and a body that returned normally still fails if
+        // anything was raised behind it.
+        if (fromTheBody is not null && fromAWindowProcedure is not null)
+        {
+            throw new AggregateException(
+                "A WinForms test body failed AND an exception was raised inside a window procedure. Both are below.",
+                fromTheBody.SourceException, fromAWindowProcedure.SourceException);
+        }
+
         // Throw() rethrows the ORIGINAL exception with its original stack trace appended to this
         // one's, so the failure xUnit prints is the assertion that failed and where.
-        failure?.Throw();
+        fromTheBody?.Throw();
+        fromAWindowProcedure?.Throw();
         return result;
     }
 
@@ -139,6 +184,87 @@ public static class WinFormsHarness
     /// messages; nothing that has only been posted has happened yet.</summary>
     public static void Pump() => Application.DoEvents();
 
+    /// <summary>
+    /// Runs <paramref name="body"/> with every control in the process reporting
+    /// <paramref name="dpi"/> as its <see cref="Control.DeviceDpi"/>, and puts the real number back
+    /// afterwards.
+    ///
+    /// WHY THIS IS NOT A NICER MECHANISM: there isn't one. Under the SystemAware regime this host
+    /// runs (see <see cref="TestHostConfiguration"/>) Control.DeviceDpi is the process's system DPI,
+    /// which Windows fixes at startup and offers no API to move; under per-monitor awareness it is
+    /// GetDpiForWindow, which is the monitor's, and a machine whose monitors are all at 100% has no
+    /// way to produce any other answer. Both were MEASURED, along with the instance field behind
+    /// DeviceDpi, which is not read at all in this regime. So the one number the framework keeps is
+    /// moved directly.
+    ///
+    /// Without this, every assertion about display scaling is vacuous on a 100% machine, and the one
+    /// mutant that matters — a layout that scales by a hard-coded 1.0 instead of by the control's own
+    /// DPI — is alive on any such machine and on CI. That is a real, shipped defect class in this
+    /// project (the history list's columns are the one part of the layout WinForms' own scaling never
+    /// reaches), so it is worth a private member to pin.
+    ///
+    /// It fails loudly if the framework ever renames what it reaches for, rather than quietly
+    /// testing nothing.
+    /// </summary>
+    public static void WithSystemDpiOf(int dpi, Action body)
+    {
+        var field = ProcessDpiField();
+        var real = (int)field.GetValue(null)!;
+        field.SetValue(null, dpi);
+        try { body(); }
+        finally { field.SetValue(null, real); }
+    }
+
+    private static FieldInfo ProcessDpiField()
+    {
+        var helper = AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a => a.GetName().Name == "System.Windows.Forms.Primitives")
+            ?.GetType("System.Windows.Forms.DpiHelper");
+        var field = helper?.GetField("<DeviceDpi>k__BackingField", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.True(field is not null,
+            "System.Windows.Forms.DpiHelper.DeviceDpi is no longer where this expects it. Display scaling "
+            + "cannot be simulated any more, so every test that uses WithSystemDpiOf is now vacuous and has "
+            + "to be given another way of moving the number — do not simply delete this.");
+        return field!;
+    }
+
+    /// <summary>
+    /// Whether anything is subscribed to <paramref name="control"/>'s MouseDown — which is the only
+    /// observable trace a drag handle leaves (see Theme.MakeDragHandle).
+    ///
+    /// WHY NOT THE REAL MOUSE: the handler answers a left button-down by sending the FORM
+    /// WM_NCLBUTTONDOWN with HTCAPTION, and Windows answers that by entering its modal window-move
+    /// loop — it takes the mouse capture and does not give it back until a button-up it will never
+    /// see. Synthesising the button-down to observe the handler would therefore hang the run with
+    /// whoever is running the tests' mouse captured by an invisible window. The subscription is
+    /// asked about instead.
+    /// </summary>
+    public static bool IsADragHandle(Control control) => HandlerFor(control, "s_mouseDownEvent") is not null;
+
+    /// <summary>Raises <paramref name="control"/>'s Click, as a mouse-up over it would. Same reason
+    /// as <see cref="IsADragHandle"/> for not using a real mouse: getting Windows to raise this one
+    /// means taking the mouse capture first.</summary>
+    public static void RaiseClick(Control control)
+    {
+        var handler = HandlerFor(control, "s_clickEvent") as EventHandler;
+        Assert.True(handler is not null, $"Nothing is subscribed to {control.Name}'s Click, so clicking it does nothing.");
+        handler!(control, EventArgs.Empty);
+    }
+
+    /// <summary>What is subscribed to one of Control's events, read out of the EventHandlerList it
+    /// keeps them in. Private framework members, so this fails loudly rather than answering "nothing
+    /// is subscribed" — which every caller above would read as a real finding.</summary>
+    private static Delegate? HandlerFor(Control control, string eventKeyField)
+    {
+        var key = typeof(Control).GetField(eventKeyField, BindingFlags.NonPublic | BindingFlags.Static);
+        var events = typeof(System.ComponentModel.Component)
+            .GetProperty("Events", BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.True(key is not null && events is not null,
+            $"Control.{eventKeyField} or Component.Events is no longer where this expects it, so which events a "
+            + "control has subscribers for can no longer be read — do not simply delete the assertions that use it.");
+        return ((System.ComponentModel.EventHandlerList)events!.GetValue(control)!)[key!.GetValue(null)!];
+    }
+
     /// <summary>Every control under <paramref name="root"/>, depth first, including the root.</summary>
     public static IEnumerable<Control> Descendants(Control root)
     {
@@ -158,6 +284,31 @@ public static class WinFormsHarness
             $"Expected exactly one {typeof(T).Name} named \"{name}\" under {root.GetType().Name}, found {matches.Count}.");
         return matches[0];
     }
+}
+
+/// <summary>
+/// Puts the test host under the same DPI regime the application runs under.
+///
+/// Program.Main calls ApplicationConfiguration.Initialize(), whose generated body ends in
+/// Application.SetHighDpiMode(HighDpiMode.SystemAware). A test host does none of that, so it starts
+/// DpiUnaware — MEASURED, not assumed — and every window test was exercising the shell under a DPI
+/// regime the product never uses. In a DpiUnaware process Windows lies to the whole process about
+/// the display: Control.DeviceDpi is 96 on a 150% monitor, screen bounds come back in virtualised
+/// coordinates, and any layout that reads either is being asked a question with a fixed answer.
+///
+/// A module initializer because this has to happen before the first window in the process, and the
+/// first window is whatever test runs first. Nothing here assumes a particular DPI: SystemAware
+/// reports whatever this machine actually is, which on a 100% display is the same 96 as before.
+/// </summary>
+public static class TestHostConfiguration
+{
+    /// <summary>Whether <see cref="Apply"/> got in before the first window. False would mean every
+    /// window test is running under a different DPI regime from the product; asserted by a test
+    /// rather than left to be noticed.</summary>
+    public static bool HighDpiModeApplied { get; private set; }
+
+    [System.Runtime.CompilerServices.ModuleInitializer]
+    internal static void Apply() => HighDpiModeApplied = Application.SetHighDpiMode(HighDpiMode.SystemAware);
 }
 
 /// <summary>

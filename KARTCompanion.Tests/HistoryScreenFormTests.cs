@@ -106,6 +106,49 @@ public class HistoryScreenFormTests
         WithHistoryScreen(Array.Empty<ArchivedAward>(), (_, list, _) => AssertColumnsMatchTheAllocator(list));
     }
 
+    // The half of that call the test above cannot see on this machine: that the scale comes from the
+    // LIST and is not a hard-coded 1.0. At 100% display scaling the two are the same number, so the
+    // assertion above is satisfied by either — and every machine this project has been measured on,
+    // and CI, is at 100%.
+    //
+    // A ListView's column widths are the one part of the layout WinForms' own scaling never reaches,
+    // which is the entire reason this arithmetic exists: at 125% the row font grows into a column
+    // that has not, and "exported (companion)" ellipsizes. A defect that only appears on someone
+    // else's display is exactly the kind this suite has to be able to see.
+    //
+    // WHERE THIS CAN BE VACUOUS: nowhere — WithSystemDpiOf moves the number every control in the
+    // process reports, so this exercises a 125% display on a machine at any scaling. The DeviceDpi
+    // assertion is what says so rather than leaving it to be trusted.
+    [WinFormsFact]
+    public void TheColumns_AreScaledByTheListsOwnDisplay_AndNotByAConstant()
+    {
+        WinFormsHarness.Run(() => WinFormsHarness.WithSystemDpiOf(120, () =>
+        {
+            var screen = new HistoryScreen(Array.Empty<ArchivedAward>(), () => new ArchiveDocument(), _ => { });
+            try
+            {
+                WinFormsHarness.RealiseHandles(screen.View);
+                WinFormsHarness.Pump();
+                var list = WinFormsHarness.Find<ListView>(screen.View, "HistoryList");
+
+                Assert.Equal(120, list.DeviceDpi);
+                AssertColumnsMatchTheAllocator(list);
+
+                // And the scaling actually moved them, so the assertion above is not comparing two
+                // copies of the same unscaled numbers.
+                Assert.Equal(
+                    HistoryListLayout.AllocateForScale(1.25, list.ClientSize.Width),
+                    list.Columns.Cast<ColumnHeader>().Select(c => c.Width).ToArray());
+                Assert.NotEqual(HistoryListLayout.LogicalColumnWidths[0], list.Columns[0].Width);
+            }
+            finally
+            {
+                screen.View.Dispose();
+                WinFormsHarness.Pump();
+            }
+        }));
+    }
+
     // The list is anchored to all four edges and re-allocates its columns whenever its client size
     // changes, which is the whole point of a resizable window: more room means a wider Item column,
     // not a wider gap beside the list. Both directions, and the fixed five keep their width — the

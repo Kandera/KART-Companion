@@ -65,9 +65,9 @@ public sealed class CompanionShell : Form
         // are the same rectangle, so MinimumSize — which is about the outer size — can be set
         // straight from what the screens' views need.
         ClientSize = ShellFrame.LargestOf(screens.Select(s => s.View.Size));
-        // KNOWN, UNFIXED: this minimum is in logical pixels and WinForms scales it with the display,
-        // so the 954 it comes to becomes about 1431 physical pixels at 150% — wider than a 1366px
-        // display, on which the window could then not be made to fit its own screen at all.
+        // In LOGICAL pixels, and WinForms scales it with the display: the 954 this comes to is about
+        // 1431 physical pixels at 150%. See the MinimumSize override below for what keeps that from
+        // becoming a window that cannot be made to fit the screen it is on.
         MinimumSize = ShellFrame.LargestOf(screens.Select(s => s.MinimumViewSize));
 
         // Icon rail: a narrow navigation-style column separating the logo/nav glance from the
@@ -261,6 +261,46 @@ public sealed class CompanionShell : Form
         if (color.HasValue) Theme.SetStatusDotColor(_railStatusDot, color.Value);
     }
 
+    /// <summary>
+    /// Every minimum this window is ever given, cut down to the working area of the screen it is on.
+    ///
+    /// The constructor sets a minimum in LOGICAL pixels and WinForms scales it with the display: the
+    /// 954 it comes to is about 1431 physical pixels at 150%. WinForms does constrain a minimum
+    /// itself on every assignment — including the one its own DPI scaling makes — but it constrains
+    /// it to the screen's BOUNDS, and the bounds are not where a window can live. On a 1366x768
+    /// display at 150% that leaves a minimum height of 738 against a working area of 720, so the
+    /// window still cannot be sized to sit above the taskbar, with nothing on screen to say why.
+    ///
+    /// A property override rather than a hook on OnDpiChanged/OnHandleCreated because the scaling
+    /// arrives as an ASSIGNMENT to this property, whoever makes it and whenever: catching it here
+    /// catches every one of them, at the moment it happens, against the screen the window is on then.
+    ///
+    /// Screen.FromRectangle rather than Screen.FromControl: the latter reads Handle, which CREATES
+    /// the window, and this setter runs from the constructor.
+    ///
+    /// Shrinking only, and safe to shrink: the list survives being narrower than its minimum — Item
+    /// clamps and the list scrolls sideways (see HistoryListLayout) — so a window smaller than its
+    /// content wants is a usable window, and one that cannot be made to fit its own screen is not.
+    /// </summary>
+    public override Size MinimumSize
+    {
+        get => base.MinimumSize;
+        set => base.MinimumSize = ShellFrame.ClampToWorkingArea(value, Screen.FromRectangle(Bounds).WorkingArea.Size);
+    }
+
+    // The other half, and the one WinForms does nothing about: a minimum that fitted the screen it
+    // was set on does not fit any more once the user has dragged the window onto a smaller one, and
+    // nothing assigns it again on the way there.
+    protected override void OnLocationChanged(EventArgs e)
+    {
+        base.OnLocationChanged(e);
+
+        var clamped = ShellFrame.ClampToWorkingArea(MinimumSize, Screen.FromRectangle(Bounds).WorkingArea.Size);
+        // Guarded: this fires for every pixel of a window drag, and assigning MinimumSize is not free
+        // (WinForms re-runs its own constraint and can resize the window).
+        if (clamped != MinimumSize) MinimumSize = clamped;
+    }
+
     private const int WM_NCHITTEST = 0x84;
 
     /// <summary>
@@ -429,6 +469,17 @@ public static class ShellFrame
     /// hit area and only moves two pixels left, which is the cheaper of the two ways out (the other
     /// is to let the ring take those two columns away from the close button).</summary>
     public static int CloseGlyphLeft(int clientWidth, int glyphWidth) => clientWidth - glyphWidth - GripMargin;
+
+    /// <summary>A minimum size cut down to fit <paramref name="workingArea"/>, each dimension taken
+    /// independently — a minimum too wide for the screen and a minimum too tall for it are two
+    /// separate problems, and a window can have either without the other.
+    ///
+    /// The working area rather than the screen's bounds: the taskbar is not somewhere a window can be
+    /// put, so a minimum height that only fits behind it is a minimum the user still cannot satisfy.
+    /// See CompanionShell.ClampMinimumSizeToScreen for when this runs.</summary>
+    public static Size ClampToWorkingArea(Size minimumSize, Size workingArea) => new(
+        Math.Min(minimumSize.Width, workingArea.Width),
+        Math.Min(minimumSize.Height, workingArea.Height));
 
     /// <summary>The smallest size that contains every one of these — each dimension taken
     /// independently, so a wide screen and a tall one together give a frame that fits both.</summary>

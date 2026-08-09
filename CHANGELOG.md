@@ -67,6 +67,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   gets exported.
 
 ### Fixed
+- **The window's smallest size now always fits the screen it is on.** Dragging the card onto a
+  smaller display left it with a minimum size the new display could not hold, so it could not be
+  resized to fit and there was nothing on screen to say why.
 - The Settings dialog rebuilt the config from a fixed list of fields on OK, dropping any field it
   did not name.
 

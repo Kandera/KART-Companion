@@ -202,6 +202,82 @@ public class CompanionShellFormTests
         });
     }
 
+    // --- the minimum size against the screen it is on ---
+
+    // A minimum larger than the screen is a window the user cannot get out of: it cannot be sized to
+    // fit, and nothing on screen says why. The shell's minimum is set in logical pixels and WinForms
+    // scales it with the display, so a scaled display is what hands it one of these.
+    //
+    // WinForms does constrain a minimum itself, and MEASURED (not assumed) it constrains it to a
+    // working area — but the working area of whichever screen the PROPOSED RECTANGLE overlaps most,
+    // which on more than one display is not the screen the window is on. That is the gap this pins:
+    // the window sits on the screen with the least room, and is handed a minimum whose rectangle
+    // reaches across the whole desktop, so WinForms' own constraint measures it against a roomier
+    // screen than the one it is on.
+    //
+    // WHERE THIS CAN BE VACUOUS: it needs a second screen with more room on it. On a single-screen
+    // machine WinForms' own constraint already answers with the right screen and this passes either
+    // way. Stated because a test that can be vacuous should say when.
+    [WinFormsFact]
+    public void AMinimumBiggerThanTheScreenTheWindowIsOn_IsCutDownAsItIsSet()
+    {
+        WithShell((shell, _, _) =>
+        {
+            var tightest = Screen.AllScreens
+                .OrderBy(s => (long)s.WorkingArea.Width * s.WorkingArea.Height).First();
+            shell.Location = tightest.WorkingArea.Location;
+            WinFormsHarness.Pump();
+
+            var everyScreen = Screen.AllScreens.Select(s => s.Bounds).Aggregate(Rectangle.Union);
+            // Comfortably across every display, so the rectangle this implies is certain to overlap
+            // some other screen more than the one the window is standing on.
+            shell.MinimumSize = new Size(everyScreen.Width * 2, everyScreen.Height * 2);
+            WinFormsHarness.Pump();
+
+            var workingArea = Screen.FromRectangle(shell.Bounds).WorkingArea.Size;
+            Assert.True(
+                shell.MinimumSize.Width <= workingArea.Width && shell.MinimumSize.Height <= workingArea.Height,
+                $"The window cannot be made to fit the screen it is on: minimum {shell.MinimumSize}, working area {workingArea}.");
+        });
+    }
+
+    // The other half, and the one WinForms does nothing about: a minimum that fitted the screen it
+    // was set on does not fit any more once the window has been dragged onto a smaller one, and
+    // nothing assigns it again on the way there.
+    //
+    // WHERE THIS CAN BE VACUOUS: it needs a second screen with less room on it than the first. On a
+    // single-screen machine the window never arrives anywhere new and this passes either way.
+    [WinFormsFact]
+    public void AWindowDraggedOntoASmallerScreen_HasItsMinimumCutToThatScreen()
+    {
+        WithShell((shell, _, _) =>
+        {
+            var byRoom = Screen.AllScreens
+                .OrderBy(s => (long)s.WorkingArea.Width * s.WorkingArea.Height).ToList();
+            var tightest = byRoom.First();
+            var roomiest = byRoom.Last();
+
+            shell.Location = roomiest.WorkingArea.Location;
+            WinFormsHarness.Pump();
+            shell.MinimumSize = roomiest.WorkingArea.Size;
+            var takenOnTheRoomiestScreen = shell.MinimumSize;
+
+            // One pixel in, so the window really arrives somewhere new even when both of those are
+            // the same screen — otherwise the move this is about would not happen at all.
+            shell.Location = new Point(tightest.WorkingArea.X + 1, tightest.WorkingArea.Y);
+            WinFormsHarness.Pump();
+
+            // The invariant, not an exact size: WinForms applies a constraint of its own on top of
+            // this one (to the screen's bounds, less two pixels), and pinning the arithmetic of two
+            // clamps stacked would be pinning WinForms' half of it.
+            var nowOn = Screen.FromRectangle(shell.Bounds).WorkingArea.Size;
+            Assert.True(
+                shell.MinimumSize.Width <= nowOn.Width && shell.MinimumSize.Height <= nowOn.Height,
+                $"A minimum of {takenOnTheRoomiestScreen} came along to a screen with {nowOn} of room and is still "
+                + $"{shell.MinimumSize}: the window cannot be made to fit the screen it is on.");
+        });
+    }
+
     // --- the screens inside the frame ---
 
     // Each screen's view is anchored to all four edges, and the anchors are set AFTER the view has

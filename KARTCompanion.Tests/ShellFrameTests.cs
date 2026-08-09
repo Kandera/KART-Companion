@@ -179,6 +179,19 @@ public class ShellFrameTests
         Assert.Equal(expected, HitTestCode(edge));
     }
 
+    // A minimum size larger than the screen is a window that cannot be made to fit the screen it is
+    // on — there is no way for the user to get out of it, and no sign of what is wrong. Each
+    // dimension independently: a minimum too wide and a minimum too tall are separate problems and
+    // clamping only the offending one leaves the other where the layout wanted it.
+    [Fact]
+    public void ClampToWorkingArea_CutsOnlyTheDimensionsThatDoNotFit()
+    {
+        Assert.Equal(new Size(954, 492), ClampToWorkingArea(new Size(954, 492), new Size(1366, 720)));
+        Assert.Equal(new Size(1366, 492), ClampToWorkingArea(new Size(1431, 492), new Size(1366, 720)));
+        Assert.Equal(new Size(954, 720), ClampToWorkingArea(new Size(954, 738), new Size(1366, 720)));
+        Assert.Equal(new Size(1366, 720), ClampToWorkingArea(new Size(1431, 738), new Size(1366, 720)));
+    }
+
     [Fact]
     public void PointFromLParam_ReadsTheTwoHalvesAsXAndY()
     {

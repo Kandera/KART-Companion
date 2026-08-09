@@ -61,7 +61,13 @@ public class CompanionShellFormTests
 
     /// <summary>The shell as the tray builds it — both screens, in the same order — with real
     /// windows for everything under it.</summary>
-    private static void WithShell(Action<CompanionShell, SettingsScreen, HistoryScreen> assertions)
+    /// <param name="asBuilt">Asked of the shell the moment its constructor returns, BEFORE any
+    /// control under it has been given a window. Realising the handles resizes the form, and a
+    /// resize re-runs half of what the constructor did — so anything the constructor is the only
+    /// thing that does has to be asked about here or not at all. See the rounded-region test.</param>
+    private static void WithShell(
+        Action<CompanionShell, SettingsScreen, HistoryScreen> assertions,
+        Action<CompanionShell>? asBuilt = null)
     {
         SettingsScreen? settings = null;
         HistoryScreen? history = null;
@@ -78,7 +84,13 @@ public class CompanionShellFormTests
                         Array.Empty<ArchivedAward>(), () => new ArchiveDocument(), _ => { });
                     logo = AppIcon.LoadLogoBitmap();
                     trayIcon = AppIcon.CreateTrayIcon(logo);
-                    return new CompanionShell(new IScreen[] { settings, history }, logo, trayIcon);
+                    var shell = new CompanionShell(new IScreen[] { settings, history }, logo, trayIcon);
+                    // Its own try: WithForm only disposes what build() RETURNS, so a failure in here
+                    // would leave the window to the finalizer and the next test's windows to whatever
+                    // that does to them.
+                    try { asBuilt?.Invoke(shell); }
+                    catch { shell.Dispose(); throw; }
+                    return shell;
                 },
                 shell => assertions(shell, settings!, history!));
         }
@@ -140,6 +152,12 @@ public class CompanionShellFormTests
             // nothing else here asserts: the header divider and the buttons agree with it through
             // ContentLeft, so widening the rail alone moves them all and no test notices.
             Assert.Equal(64, rail.Width);
+
+            // And the status dot is centred ACROSS the rail rather than parked against one of its
+            // edges. Stated as "the same gap either side", not as the arithmetic that produces it, so
+            // a literal Left cannot satisfy it: at Left 0 the dot is a smudge on the rail's own edge,
+            // half of it under the window's left resize ring.
+            Assert.Equal(rail.Width - statusDot.Right, statusDot.Left);
 
             var gapsUnderTheStatusDot = new List<int>();
 
@@ -244,6 +262,52 @@ public class CompanionShellFormTests
         });
     }
 
+    // Everything the frame says about WHICH screen you are on, which is all of it: the accent bar
+    // beside one nav icon, the subtitle under the title, and the rail's health dot. The test above
+    // pins that the right VIEW is shown; none of these three is visible to it, and all three used to
+    // survive being switched off — an accent bar on every item, a subtitle that never changes, and a
+    // dot that keeps reporting the screen you navigated away from.
+    //
+    // Asked of Windows rather than of Control.Visible for the same reason as the test above: inside a
+    // form that has never been shown every control reads false. See IsShown.
+    [WinFormsFact]
+    public void TheRail_MarksAndNamesWhicheverScreenIsCurrent()
+    {
+        WithShell((shell, settings, history) =>
+        {
+            var rail = WinFormsHarness.Find<Panel>(shell, "Rail");
+            var subtitle = WinFormsHarness.Find<Label>(shell, "Subtitle");
+            var statusDot = WinFormsHarness.Find<Panel>(shell, "RailStatusDot");
+            var accents = WinFormsHarness.Descendants(rail).Where(c => c.Name == "NavAccent").ToList();
+            var navIcons = WinFormsHarness.Descendants(rail).Where(c => c.Name == "NavIcon").ToList();
+            Assert.Equal(2, accents.Count);
+            Assert.Equal(2, navIcons.Count);
+
+            // The premise the dot half rests on, restated rather than assumed: these two screens
+            // disagree about whether they have a health to report at all, which is what makes the dot
+            // appearing and disappearing observable.
+            Assert.True(settings.StatusColor.HasValue, "The settings screen reports no status colour, so the rail dot cannot be seen to follow it.");
+            Assert.Null(history.StatusColor);
+
+            Assert.True(IsShown(accents[0]), "Nothing in the rail marks the screen the window opened on.");
+            Assert.False(IsShown(accents[1]),
+                "Every nav item is marked as current at once, so the rail says nothing about which screen you are on.");
+            Assert.Equal(settings.Title, subtitle.Text);
+            Assert.True(IsShown(statusDot), "The rail's health dot is hidden on a screen that reports a status colour.");
+            Assert.Equal(settings.StatusColor!.Value, (Color)statusDot.Tag!);
+
+            WinFormsHarness.RaiseClick(navIcons[1]);
+            WinFormsHarness.Pump();
+
+            Assert.False(IsShown(accents[0]), "The nav item for the screen navigated AWAY from is still marked as current.");
+            Assert.True(IsShown(accents[1]), "The nav item for the screen just navigated to is not marked as current.");
+            Assert.Equal(history.Title, subtitle.Text);
+            Assert.False(IsShown(statusDot),
+                "The rail's health dot is still shown on a screen that reports no status, so it is reporting the "
+                + "health of the screen you left.");
+        });
+    }
+
     // --- the window's own shape ---
 
     // FormBorderStyle.None leaves no OS-drawn edge, so the rounded card the mockup asks for is a
@@ -251,34 +315,50 @@ public class CompanionShellFormTests
     // corners against the desktop. The Region is rebuilt on every Resize, which since the window
     // became draggable by its edges is every frame of a live drag, so this asks at the size the
     // window has been dragged to and not only at the one it opened with.
+    //
+    // AND at the size it opens with, which is a separate mechanism and needs asking about separately:
+    // ApplyRoundedFormRegion rounds the window ONCE as it is built and then rebuilds the shape on
+    // every Resize. Removing that first, direct application leaves this test green if it is asked
+    // anywhere but in `asBuilt` — giving the form a window handle is itself a resize (MEASURED: the
+    // shape comes back even with the constructor's own call deleted), and so is every ClientSize in
+    // the loop. So the window a user actually opens would have square corners until they dragged an
+    // edge, and only an assertion made before Windows has been involved at all can see it.
     [WinFormsFact]
     public void TheWindow_IsRoundedAtWhateverSizeItHasBeenDraggedTo()
     {
-        WithShell((shell, _, _) =>
-        {
-            foreach (var size in new[] { new Size(1200, 820), new Size(980, 520) })
+        WithShell(
+            (shell, _, _) =>
             {
-                shell.ClientSize = size;
-                WinFormsHarness.Pump();
+                foreach (var size in new[] { new Size(1200, 820), new Size(980, 520) })
+                {
+                    shell.ClientSize = size;
+                    WinFormsHarness.Pump();
 
-                var region = shell.Region;
-                Assert.True(region is not null, "The window has no Region, so its corners are square.");
+                    AssertRounded(shell, size);
+                }
+            },
+            asBuilt: shell => AssertRounded(shell, shell.ClientSize));
+    }
 
-                Assert.False(region!.IsVisible(new Point(0, 0)),
-                    "The window's top-left corner pixel is part of the window, so the corner is square.");
-                Assert.False(region.IsVisible(new Point(size.Width - 1, size.Height - 1)),
-                    "The window's bottom-right corner pixel is part of the window, so the corner is square.");
+    /// <summary>The window's corners are cut and its edges are not, at the size it is now.</summary>
+    private static void AssertRounded(Form shell, Size size)
+    {
+        var region = shell.Region;
+        Assert.True(region is not null, $"The window has no Region at {size}, so its corners are square.");
 
-                // And the shape is the size the window is NOW: a Region applied once and never
-                // rebuilt would clip away everything past the size the window opened at.
-                Assert.True(region.IsVisible(new Point(size.Width / 2, size.Height - 1)),
-                    $"The middle of the window's bottom edge is outside its own Region at {size}, so the "
-                    + "rounded shape is a stale one from an earlier size.");
-                Assert.True(region.IsVisible(new Point(size.Width - 1, size.Height / 2)),
-                    $"The middle of the window's right edge is outside its own Region at {size}, so the "
-                    + "rounded shape is a stale one from an earlier size.");
-            }
-        });
+        Assert.False(region!.IsVisible(new Point(0, 0)),
+            $"The window's top-left corner pixel is part of the window at {size}, so the corner is square.");
+        Assert.False(region.IsVisible(new Point(size.Width - 1, size.Height - 1)),
+            $"The window's bottom-right corner pixel is part of the window at {size}, so the corner is square.");
+
+        // And the shape is the size the window is NOW: a Region applied once and never
+        // rebuilt would clip away everything past the size the window opened at.
+        Assert.True(region.IsVisible(new Point(size.Width / 2, size.Height - 1)),
+            $"The middle of the window's bottom edge is outside its own Region at {size}, so the "
+            + "rounded shape is a stale one from another size.");
+        Assert.True(region.IsVisible(new Point(size.Width - 1, size.Height / 2)),
+            $"The middle of the window's right edge is outside its own Region at {size}, so the "
+            + "rounded shape is a stale one from another size.");
     }
 
     // --- what the window can be dragged by ---
@@ -437,9 +517,15 @@ public class CompanionShellFormTests
     // reaches across the whole desktop, so WinForms' own constraint measures it against a roomier
     // screen than the one it is on.
     //
-    // WHERE THIS CAN BE VACUOUS: it needs a second screen with more room on it. On a single-screen
-    // machine WinForms' own constraint already answers with the right screen and this passes either
-    // way. Stated because a test that can be vacuous should say when.
+    // WHERE THIS IS VACUOUS, AND IT IS VACUOUS ON CI: it needs a second screen with more room on it.
+    // On a single-screen machine WinForms' own constraint already answers with the right screen and
+    // this passes whether or not the MinimumSize override below it exists. windows-latest, which is
+    // the only place this suite runs unattended, has ONE display — so this test and the one after it
+    // are green there for the wrong reason, and the two mechanisms they are about (the MinimumSize
+    // override and the OnLocationChanged re-clamp) are effectively unverified by CI and rest on the
+    // maintainer's own multi-screen desk. Neither can be fixed from here: nothing in a test can
+    // conjure a second monitor. Read a CI pass on these two as "did not break the build", not as
+    // "the clamp works".
     [WinFormsFact]
     public void AMinimumBiggerThanTheScreenTheWindowIsOn_IsCutDownAsItIsSet()
     {
@@ -467,8 +553,10 @@ public class CompanionShellFormTests
     // was set on does not fit any more once the window has been dragged onto a smaller one, and
     // nothing assigns it again on the way there.
     //
-    // WHERE THIS CAN BE VACUOUS: it needs a second screen with less room on it than the first. On a
-    // single-screen machine the window never arrives anywhere new and this passes either way.
+    // WHERE THIS IS VACUOUS, AND IT IS VACUOUS ON CI: it needs a second screen with less room on it
+    // than the first. On a single-screen machine the window never arrives anywhere new and this
+    // passes either way — including on windows-latest, which has one display. See the test above for
+    // what that means for both of these.
     [WinFormsFact]
     public void AWindowDraggedOntoASmallerScreen_HasItsMinimumCutToThatScreen()
     {
@@ -549,6 +637,147 @@ public class CompanionShellFormTests
                 Assert.Equal(size.Width - RightMargin, ok.Right);
                 Assert.Equal(ContentLeft, forceSync.Left);
             }
+        });
+    }
+
+    // --- the frame's own decisions, against screens that disagree ---
+
+    /// <summary>
+    /// A screen that is nothing but the three answers the frame asks a screen for: how big its view
+    /// is, how small it may get, and whether Escape belongs to it.
+    ///
+    /// WHY A DOUBLE HERE AND NOWHERE ELSE IN THIS FILE: the two real screens lay themselves out at
+    /// exactly the same size (1042x700) and neither of the two constructor lines below can be seen
+    /// through them — "the largest of the screens' sizes" and "the first screen's size" are the same
+    /// number, so the mutant that replaces one with the other is alive with the whole rest of this
+    /// file green. The defect those lines exist to fix ("the window changed width on every switch")
+    /// only exists when screens disagree, so a test of them has to supply screens that do.
+    /// </summary>
+    private sealed class StubScreen : IScreen
+    {
+        public StubScreen(string title, Size viewSize, Size minimumViewSize, bool wantsEscape = false)
+        {
+            Title = title;
+            View = new Panel { Name = "StubView", Size = viewSize };
+            MinimumViewSize = minimumViewSize;
+            if (wantsEscape) CancelButton = new Button { Name = "StubCancel" };
+        }
+
+        public string Title { get; }
+        public Theme.IconGlyph Glyph => Theme.IconGlyph.Sliders;
+        public Control View { get; }
+        public Size MinimumViewSize { get; }
+        public Size ViewSizeAsBuilt => View.Size;
+        public Color? StatusColor => null;
+        public IButtonControl? CancelButton { get; }
+        public event EventHandler? StatusChanged { add { } remove { } }
+    }
+
+    /// <summary>The shell over screens this test supplies, with the icon it was handed available to
+    /// assert about. Same disposal contract as WithShell — see there for the HICON.</summary>
+    private static void WithStubShell(IReadOnlyList<StubScreen> screens, Action<CompanionShell, Icon> assertions)
+    {
+        Bitmap? logo = null;
+        Icon? trayIcon = null;
+        try
+        {
+            WinFormsHarness.WithForm(
+                () =>
+                {
+                    logo = AppIcon.LoadLogoBitmap();
+                    trayIcon = AppIcon.CreateTrayIcon(logo);
+                    return new CompanionShell(screens.Cast<IScreen>().ToList(), logo, trayIcon);
+                },
+                shell => assertions(shell, trayIcon!));
+        }
+        finally
+        {
+            logo?.Dispose();
+            if (trayIcon is not null)
+            {
+                var handle = trayIcon.Handle;
+                trayIcon.Dispose();
+                DestroyIcon(handle);
+            }
+        }
+    }
+
+    // The two sizes the constructor decides once, and the defect its own comment says they were
+    // built to fix: each screen used to dictate ClientSize through its own View.Size, so the window
+    // changed width every time the user clicked the other rail icon.
+    //
+    // ShellFrameTests pins LargestOf as a function. What it cannot see is whether the constructor
+    // calls it, or calls it with the right sizes — and both of those lines survive being replaced by
+    // the first screen's numbers when every screen has the same numbers, which the two real ones do.
+    //
+    // The minimums here are deliberately SMALLER than either view, in both dimensions. WinForms grows
+    // a form to its own MinimumSize as that is assigned, and the assignment is two lines after the
+    // ClientSize one — so a minimum that reached past a view size would grow the window back and hide
+    // exactly the mutant this is here to catch.
+    [WinFormsFact]
+    public void TheFrame_OpensAtTheLargestOfItsScreens_AndStopsAtTheLargestOfTheirMinimums()
+    {
+        // Widest first, tallest second, so neither number can come from one screen alone: the frame
+        // that fits both is 800 x 400, which is neither screen's own size.
+        var widest = new StubScreen("Widest", new Size(800, 300), new Size(500, 100));
+        var tallest = new StubScreen("Tallest", new Size(600, 400), new Size(300, 200));
+
+        WithStubShell(new[] { widest, tallest }, (shell, _) =>
+        {
+            Assert.Equal(new Size(800, 400), shell.ClientSize);
+            Assert.Equal(new Size(500, 200), shell.MinimumSize);
+        });
+    }
+
+    // Escape. A Form answers it only through its CancelButton, and this window has no native title
+    // bar, so a screen that does not want Escape for something of its own leaves the user with no
+    // keyboard way out at all — the close glyph and the mouse, on a window that cannot be closed by
+    // the keyboard. The fallback is a zero-sized button on the frame; without it, Escape does nothing
+    // on the history screen, and nothing on screen says so.
+    [WinFormsFact]
+    public void EscapeClosesTheWindow_OnAScreenThatDoesNotWantEscapeForItself()
+    {
+        var wantsEscape = new StubScreen("Cancels", new Size(600, 400), new Size(300, 200), wantsEscape: true);
+        var doesNot = new StubScreen("Does not", new Size(600, 400), new Size(300, 200));
+
+        WithStubShell(new[] { wantsEscape, doesNot }, (shell, _) =>
+        {
+            // A screen that wants Escape keeps it: the fallback must not take it away.
+            Assert.Same(wantsEscape.CancelButton, shell.CancelButton);
+
+            var navIcons = WinFormsHarness.Descendants(WinFormsHarness.Find<Panel>(shell, "Rail"))
+                .Where(c => c.Name == "NavIcon").ToList();
+            WinFormsHarness.RaiseClick(navIcons[1]);
+            WinFormsHarness.Pump();
+
+            Assert.NotNull(shell.CancelButton);
+            Assert.NotSame(wantsEscape.CancelButton, shell.CancelButton);
+
+            // And it is not merely non-null: pressing it closes the window, which is what Escape on a
+            // borderless card is expected to do. Raised as a click rather than as a keystroke — a real
+            // Escape needs a message loop and a focused, shown window, and this suite shows none.
+            WinFormsHarness.RaiseClick((Control)shell.CancelButton!);
+            WinFormsHarness.Pump();
+            Assert.True(shell.IsDisposed, "Escape's fallback button did not close the window.");
+        });
+    }
+
+    // The icon Windows shows for this window — in the task switcher, in Alt-Tab, and on the taskbar
+    // button — and where the window first appears. Neither is visible to any other test here: the
+    // suite never shows the window, which is the whole point of the harness, so these are asserted as
+    // the properties Windows will read when it eventually is shown.
+    [WinFormsFact]
+    public void TheWindow_CarriesTheIconItWasGiven_AndOpensCentredOnItsScreen()
+    {
+        var only = new StubScreen("Only", new Size(600, 400), new Size(300, 200));
+
+        WithStubShell(new[] { only }, (shell, icon) =>
+        {
+            Assert.Same(icon, shell.Icon);
+            // Not Windows' default placement: FormBorderStyle.None gives no title bar to drag the
+            // window back by if it opens somewhere unhelpful, and a tray application's window is
+            // summoned rather than found.
+            Assert.Equal(FormStartPosition.CenterScreen, shell.StartPosition);
         });
     }
 }

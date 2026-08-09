@@ -676,9 +676,13 @@ public class CompanionShellFormTests
     // The other half, over the same invented layout: a minimum that fitted the screen it was set on
     // does not fit any more once the window has moved, and nothing assigns it again on the way there.
     //
-    // The first assertion is half the test. Without it a shell that clamped against one fixed screen —
-    // the primary, the smallest, the first one it found — would still pass the second, and the
-    // mechanism this is about is that the answer FOLLOWS the window.
+    // The first two assertions are half the test, and neither is decoration. Without the first, a
+    // shell that clamped against one fixed screen — the primary, the smallest, the first one it found
+    // — would still pass the last. Without the SECOND, a re-clamp that asked about the right size but
+    // the wrong POSITION would too: a move within the roomy screen has to leave the minimum alone,
+    // and that is only visible when the window moves without changing screens. (Measured: with only
+    // the first two steps, a re-clamp that asks about a rectangle at the origin instead of the
+    // window's own survives this test.)
     [WinFormsFact]
     public void AWindowMovedOntoASmallerScreen_HasItsMinimumCutToIt_OnAnInventedLayout()
     {
@@ -689,6 +693,11 @@ public class CompanionShellFormTests
 
             // Fits the roomy screen in both dimensions, and is too tall for the tight one.
             shell.MinimumSize = new Size(380, 300);
+            WinFormsHarness.Pump();
+            Assert.Equal(new Size(380, 300), shell.MinimumSize);
+
+            // Moved, but still wholly on the roomy screen: nothing to cut.
+            shell.Location = new Point(500, 100);
             WinFormsHarness.Pump();
             Assert.Equal(new Size(380, 300), shell.MinimumSize);
 

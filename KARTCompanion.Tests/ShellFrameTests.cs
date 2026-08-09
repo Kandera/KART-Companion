@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Windows.Forms;
 using KARTCompanion.Shell;
 using static KARTCompanion.Shell.ShellFrame;
 
@@ -190,6 +191,24 @@ public class ShellFrameTests
         Assert.Equal(new Size(1366, 492), ClampToWorkingArea(new Size(1431, 492), new Size(1366, 720)));
         Assert.Equal(new Size(954, 720), ClampToWorkingArea(new Size(954, 738), new Size(1366, 720)));
         Assert.Equal(new Size(1366, 720), ClampToWorkingArea(new Size(1431, 738), new Size(1366, 720)));
+    }
+
+    // Where the number the clamp above is given comes from, when nobody supplies one. Two separate
+    // claims: it is the working area and not the screen's BOUNDS, and it is the screen that rectangle
+    // is on and not a fixed one.
+    //
+    // WHERE THIS IS PARTLY VACUOUS: the first claim is only visible on a screen whose taskbar
+    // actually takes room off it — on a screen with working area == bounds the two answers are the
+    // same number and nothing here can tell them apart. Every screen the machine has is tried, so it
+    // is enough that ONE of them has a taskbar; a machine where none does (and a CI runner may be
+    // one) verifies only the second claim. The second is only visible on a machine with more than one
+    // screen. Asserted here rather than through a window because WinForms applies a working-area
+    // clamp of its own on top of the shell's, which hides the difference entirely.
+    [Fact]
+    public void WorkingAreaOf_IsTheWorkingAreaOfTheScreenThatRectangleIsOn()
+    {
+        foreach (var screen in Screen.AllScreens)
+            Assert.Equal(screen.WorkingArea.Size, WorkingAreaOf(screen.WorkingArea));
     }
 
     [Fact]

@@ -48,12 +48,7 @@ public sealed class CompanionShell : Form
     /// Windows exactly as it did before, and the constructor parameter below is optional and unused
     /// by TrayApplicationContext.
     /// </summary>
-    private readonly Func<Rectangle, Size> _workingAreaOf = RealWorkingArea;
-
-    /// <summary>Screen.FromRectangle rather than Screen.FromControl: the latter reads Handle, which
-    /// CREATES the window, and this runs from the MinimumSize setter, which runs from the
-    /// constructor.</summary>
-    private static Size RealWorkingArea(Rectangle rectangle) => Screen.FromRectangle(rectangle).WorkingArea.Size;
+    private readonly Func<Rectangle, Size> _workingAreaOf = ShellFrame.WorkingAreaOf;
 
     public IScreen Current { get; private set; }
 
@@ -450,6 +445,10 @@ public sealed class CompanionShell : Form
 /// The frame's geometry decisions, kept out of CompanionShell so every case of them can be
 /// enumerated cheaply, without a window (see ShellFrameTests). The wiring that connects them to real
 /// controls needs one and has one — see CompanionShellFormTests.
+///
+/// One member here asks the machine rather than deciding anything: <see cref="WorkingAreaOf"/>, the
+/// frame's default answer to "which working area applies to this rectangle". It lives beside the
+/// clamp it feeds because that is the pair — where the number comes from, and what is done with it.
 /// </summary>
 public static class ShellFrame
 {
@@ -551,6 +550,18 @@ public static class ShellFrame
     public static Size ClampToWorkingArea(Size minimumSize, Size workingArea) => new(
         Math.Min(minimumSize.Width, workingArea.Width),
         Math.Min(minimumSize.Height, workingArea.Height));
+
+    /// <summary>The working area that applies to a rectangle — what the shell clamps against unless a
+    /// test supplies a display layout of its own (see CompanionShell's <c>workingAreaOf</c>).
+    ///
+    /// The WORKING area and not the screen's bounds, for the reason above: the taskbar is not
+    /// somewhere a window can be put. The two differ only on a screen that has one, so on a screen
+    /// without a taskbar this distinction is invisible — which is why it is asserted directly, over
+    /// every screen the machine has, rather than through a window.
+    ///
+    /// Screen.FromRectangle rather than Screen.FromControl: the latter reads Handle, which CREATES
+    /// the window, and this runs from a MinimumSize setter that runs from a constructor.</summary>
+    public static Size WorkingAreaOf(Rectangle rectangle) => Screen.FromRectangle(rectangle).WorkingArea.Size;
 
     /// <summary>The smallest size that contains every one of these — each dimension taken
     /// independently, so a wide screen and a tall one together give a frame that fits both.</summary>

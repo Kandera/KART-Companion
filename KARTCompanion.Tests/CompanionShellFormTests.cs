@@ -38,6 +38,15 @@ public class CompanionShellFormTests
     [DllImport("user32.dll")]
     private static extern bool DestroyIcon(IntPtr handle);
 
+    [DllImport("user32.dll")]
+    private static extern bool GetClientRect(IntPtr hWnd, out NativeRect rect);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
     /// <summary>Whether Windows has this control's OWN window marked as shown.
     ///
     /// Not <see cref="Control.Visible"/>, which cannot answer this here: it reports whether the
@@ -131,6 +140,112 @@ public class CompanionShellFormTests
     private const int ContentLeft = 80;
     private const int RightMargin = 12;
 
+    // --- driving the window through sizes the machine will actually grant ---
+
+    /// <summary>
+    /// How big Windows' client area for this window really is, asked of Windows.
+    ///
+    /// NOT <see cref="Control.ClientSize"/>, which cannot answer it. Its setter writes the size that
+    /// was REQUESTED into the same field the getter reads, and it does so AFTER the SetWindowPos that
+    /// Windows may already have refused — so a window that was cut down to fit the display goes on
+    /// reporting the size nobody gave it. MEASURED on this project's own shell: asked for 4000x3000
+    /// on a machine whose window ceiling is 1461 tall, <c>ClientSize</c> came back 4000x3000 while
+    /// <c>Size</c>, <c>GetClientRect</c> and every control anchored to the frame came back 4000x1461.
+    ///
+    /// That gap is the whole reason five tests in this file were green on a three-monitor desk and red
+    /// on CI: they asserted against the size they had ASKED for.
+    /// </summary>
+    private static Size ClientSizeOf(Form shell)
+    {
+        Assert.True(GetClientRect(shell.Handle, out var client),
+            "Windows would not say how big this window's client area is.");
+        return new Size(client.Right - client.Left, client.Bottom - client.Top);
+    }
+
+    /// <summary>Resizes the window and answers with the size it ACTUALLY took — which is what every
+    /// assertion driven from a resize is made against, and never the size that was asked for.</summary>
+    private static Size ResizeTo(Form shell, Size wanted)
+    {
+        shell.ClientSize = wanted;
+        WinFormsHarness.Pump();
+        return ClientSizeOf(shell);
+    }
+
+    /// <summary>How far above the window's own minimum the largest probe size reaches, when the
+    /// machine has the room. Far enough apart that the three sizes are visibly different windows, and
+    /// small enough that a desk spanning three monitors is not asked for a 7700-pixel one.</summary>
+    private const int ProbeHeadroom = 300;
+
+    /// <summary>
+    /// Three client sizes to drive this window through, built from THIS machine instead of from
+    /// numbers that happened to fit the author's desk.
+    ///
+    /// THE CEILING is <see cref="SystemInformation.MaxWindowTrackSize"/>, which is what Windows will
+    /// not let a window exceed. MEASURED as the binding constraint, in two places: here it is
+    /// 7700x1461 on a virtual desktop of 7680x1441 (the screen plus a frame allowance), and a window
+    /// asked for exactly that got exactly that; on windows-latest, whose one display is 1024x768, the
+    /// shell asked for 1200x820 and came back 1044x788 — 1024+20 by 768+20, the same rule. The
+    /// primary screen's WORKING area is NOT the constraint: it is smaller than the ceiling in both
+    /// measurements (2560x1392 here, and CI's window was larger than its whole screen).
+    ///
+    /// THE FLOOR is the window's own <see cref="Form.MinimumSize"/>, which WinForms will not let it go
+    /// under. Asking for less does not fail — the window silently snaps up, and three sizes below the
+    /// floor would be three assertions at one size.
+    ///
+    /// THE ORDER, middle then largest then floor, makes one growth and one shrink certain whatever
+    /// size the window opened at: anchors that only work in one direction are the defect this order
+    /// exists for, and on a small display "largest" can be barely above the size the window opens at.
+    ///
+    /// NOT A CLOSED LOOP: these are derived from the ceiling and the floor, while every assertion is
+    /// derived from <see cref="ClientSizeOf"/> — what Windows says the window became. A layout wired
+    /// to a constant instead of to the client size still goes red (measured; see the report).
+    /// </summary>
+    private static Size[] ResizeProbeSizes(Form shell)
+    {
+        var ceiling = SystemInformation.MaxWindowTrackSize;
+        var floor = shell.MinimumSize;
+        var largest = new Size(
+            Math.Min(ceiling.Width, floor.Width + ProbeHeadroom),
+            Math.Min(ceiling.Height, floor.Height + ProbeHeadroom));
+        var middle = new Size((floor.Width + largest.Width) / 2, (floor.Height + largest.Height) / 2);
+        return new[] { middle, largest, floor };
+    }
+
+    /// <summary>
+    /// Drives <paramref name="shell"/> through <see cref="ResizeProbeSizes"/> and hands
+    /// <paramref name="atEachSize"/> the size the window ACTUALLY took each time.
+    ///
+    /// AND REFUSES TO BE VACUOUS: the three sizes have to come back different from one another in
+    /// both dimensions. A display with no room to move this window would otherwise run every
+    /// assertion below three times at one size, and "the same gap at three heights" and "the glyph's
+    /// place at three widths" would be pinning nothing while reporting green. This is deliberately a
+    /// loud failure rather than a skip: every assertion these tests make is relative to the size the
+    /// window took, so they stay honest on a display far smaller than the layout's own minimum — the
+    /// shell cuts its minimum down to the screen and goes on laying itself out — and the only machine
+    /// this can fail on is one with no room between that minimum and the ceiling at all, where the
+    /// right answer is to say so and not to pass.
+    /// </summary>
+    private static void ThroughAResize(Form shell, Action<Size> atEachSize)
+    {
+        var wantedSizes = ResizeProbeSizes(shell);
+        var taken = new List<Size>();
+        foreach (var wanted in wantedSizes)
+        {
+            var actual = ResizeTo(shell, wanted);
+            taken.Add(actual);
+            atEachSize(actual);
+        }
+
+        Assert.True(
+            taken.Select(s => s.Width).Distinct().Count() == taken.Count
+            && taken.Select(s => s.Height).Distinct().Count() == taken.Count,
+            "This display has no room to resize the window: asked for "
+            + string.Join(", ", wantedSizes) + " between a minimum of " + shell.MinimumSize
+            + " and a ceiling of " + SystemInformation.MaxWindowTrackSize + ", the window took "
+            + string.Join(", ", taken) + " — so everything above was asserted more than once at the "
+            + "same size and pins nothing about a resize.");
+    }
+
     // --- chrome against the current client size ---
 
     // Every one of these used to be re-asserted from a constant on every screen switch, which is
@@ -161,11 +276,8 @@ public class CompanionShellFormTests
 
             var gapsUnderTheStatusDot = new List<int>();
 
-            foreach (var size in new[] { new Size(1200, 820), new Size(980, 520), new Size(1042, 700) })
+            ThroughAResize(shell, size =>
             {
-                shell.ClientSize = size;
-                WinFormsHarness.Pump();
-
                 Assert.Equal(size.Height, rail.Height);
                 Assert.Equal(size.Height, railDivider.Height);
 
@@ -186,7 +298,7 @@ public class CompanionShellFormTests
                 gapsUnderTheStatusDot.Add(rail.Height - statusDot.Bottom);
                 Assert.True(statusDot.Top >= 0 && statusDot.Bottom <= rail.Height,
                     $"The rail's status dot is outside the rail at {size}: dot {statusDot.Bounds}, rail height {rail.Height}.");
-            }
+            });
 
             Assert.True(gapsUnderTheStatusDot.Distinct().Count() == 1,
                 "The rail's status dot does not follow the rail's bottom edge — the gap below it came out as "
@@ -355,17 +467,11 @@ public class CompanionShellFormTests
     public void TheWindow_IsRoundedAtWhateverSizeItHasBeenDraggedTo()
     {
         WithShell(
-            (shell, _, _) =>
-            {
-                foreach (var size in new[] { new Size(1200, 820), new Size(980, 520) })
-                {
-                    shell.ClientSize = size;
-                    WinFormsHarness.Pump();
-
-                    AssertRounded(shell, size);
-                }
-            },
-            asBuilt: shell => AssertRounded(shell, shell.ClientSize));
+            (shell, _, _) => ThroughAResize(shell, size => AssertRounded(shell, size)),
+            // Size and not ClientSize: the Region is built from the window's OUTER rectangle
+            // (Theme.BuildRoundedPath takes form.Width and form.Height), the two are the same
+            // rectangle on a borderless form, and there is no window here to ask Windows about yet.
+            asBuilt: shell => AssertRounded(shell, shell.Size));
     }
 
     /// <summary>The window's corners are cut and its edges are not, at the size it is now.</summary>
@@ -447,11 +553,8 @@ public class CompanionShellFormTests
         {
             var glyph = WinFormsHarness.Find<Control>(shell, "CloseGlyph");
 
-            foreach (var size in new[] { new Size(1042, 700), new Size(1200, 820), new Size(980, 520) })
+            ThroughAResize(shell, size =>
             {
-                shell.ClientSize = size;
-                WinFormsHarness.Pump();
-
                 var rightmostColumn = glyph.Right - 1;
 
                 // Its own top and bottom rows, at its rightmost pixel column: still the form's
@@ -464,7 +567,7 @@ public class CompanionShellFormTests
                 // that fails if the glyph is never moved at all.
                 Assert.Equal(FrameEdge.TopRight, ResizeEdgeAt(new Point(rightmostColumn + 1, glyph.Top), size));
                 Assert.Equal(FrameEdge.Right, ResizeEdgeAt(new Point(rightmostColumn + 1, glyph.Bottom - 1), size));
-            }
+            });
         });
     }
 
@@ -812,14 +915,11 @@ public class CompanionShellFormTests
     {
         WithShell((shell, settings, history) =>
         {
-            foreach (var size in new[] { new Size(1200, 820), new Size(980, 520), new Size(1042, 700) })
+            ThroughAResize(shell, size =>
             {
-                shell.ClientSize = size;
-                WinFormsHarness.Pump();
-
                 Assert.Equal(size, settings.View.Size);
                 Assert.Equal(size, history.View.Size);
-            }
+            });
         });
     }
 
@@ -837,11 +937,8 @@ public class CompanionShellFormTests
             var cancel = buttons.Single(b => b.Text == "Cancel");
             var forceSync = buttons.Single(b => b.Text == "Force Sync");
 
-            foreach (var size in new[] { new Size(1200, 820), new Size(980, 520) })
+            ThroughAResize(shell, size =>
             {
-                shell.ClientSize = size;
-                WinFormsHarness.Pump();
-
                 var expectedTop = SettingsScreenText.ActionRowTop(settings.View.Height, ok.Height);
                 Assert.Equal(expectedTop, ok.Top);
                 Assert.Equal(expectedTop, cancel.Top);
@@ -849,7 +946,7 @@ public class CompanionShellFormTests
 
                 Assert.Equal(size.Width - RightMargin, ok.Right);
                 Assert.Equal(ContentLeft, forceSync.Left);
-            }
+            });
         });
     }
 

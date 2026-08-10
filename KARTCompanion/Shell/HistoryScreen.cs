@@ -960,15 +960,47 @@ public static class HistoryExportPlanner
         Held,
     }
 
+    /// <summary>
+    /// The addon's MANUAL_ROLL_ID_BASE (KeineAhnungRaidTools, LootCouncil.lua). Every roll the
+    /// lootmaster starts with <c>/kart add</c> is seeded at or above this. Blizzard's own roll ids
+    /// are a per-session counter and sit nowhere near it — in the maintainer's real file they run
+    /// 1..29 while the manual ones run 528998..596757.
+    ///
+    /// The second place an addon constant is duplicated into the Companion (see
+    /// ArchiveMerger.AddonHistoryCap). This threshold's two flanks are NOT equally dangerous:
+    ///   * this value BELOW the addon's base — the manual adds seeded between the two fall through
+    ///     and render with an empty Raid cell. Harmless: that is exactly what every manual add
+    ///     looks like today, and a gap that turns out not to be one costs the reader a single look.
+    ///   * a real Blizzard roll id REACHING this value — a genuine gap gets labelled a manual add,
+    ///     so the one column meant to expose it reports instead that nothing is wrong, and the
+    ///     defect stops being looked for. Harmful, and silently so. No change the addon can make
+    ///     reaches this flank; it takes Blizzard's counter climbing four orders of magnitude past
+    ///     what the real file shows.
+    /// So if this value ever has to be wrong, it must be wrong HIGH. Raising the addon's base costs
+    /// nothing here; lowering it below 500000 quietly retires the label.
+    /// </summary>
+    public const long AddonManualRollIdBase = 500000;
+
     /// <summary>The Raid column's text: the raid name and its difficulty, joined by an em dash when
     /// both are present. <c>Instance</c> is absent on every award logged before the addon started
     /// recording it, and will stay absent on those forever — that is not a defect (see
     /// LootHistoryEntry's own remarks on absence), so those awards fall back to showing just the
-    /// difficulty, exactly what the old Difficulty column showed.</summary>
+    /// difficulty, exactly what the old Difficulty column showed.
+    ///
+    /// An award with no instance but a manual roll id takes the instance's place in the line and
+    /// says so. The lootmaster typed <c>/kart add</c> while not standing in the raid — re-deciding
+    /// an item after the evening, say — and the addon reads the world it is in at that moment, so
+    /// there was no instance to record. That is ordinary, and it must not look like the other
+    /// reason this field comes back empty: something that should have carried through and did not.
+    /// An award with neither an instance nor a manual roll id therefore renders exactly as it did
+    /// before, because that one is a real gap and is supposed to look like one.</summary>
     public static string RaidDisplay(LootHistoryEntry e)
     {
         var instance = e.Instance;
         var difficulty = DifficultyNames.Canonical(e);
+
+        if (string.IsNullOrEmpty(instance) && e.RollId >= AddonManualRollIdBase)
+            instance = "manual add";
 
         if (!string.IsNullOrEmpty(instance) && !string.IsNullOrEmpty(difficulty))
             return $"{instance} — {difficulty}";

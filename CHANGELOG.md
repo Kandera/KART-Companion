@@ -64,7 +64,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   awards; existing awards, which never carry those fields, keep showing just the difficulty. The
   difficulty name itself now comes from the same table the export uses, so the list can no longer
   show a localized string (e.g. "Mythisch") or a raw difficultyID number that disagrees with what
-  gets exported.
+  gets exported. An award decided with `/kart add` from outside the instance has no raid for the
+  addon to read, and the column now says so (`manual add — Mythic`) instead of leaving a blank that
+  cannot be told apart from a raid name that genuinely failed to carry through. Nothing about the
+  export changes — this is a label in the window only.
 
 ### Fixed
 - **The window's smallest size now always fits the screen it is on.** Dragging the card onto a

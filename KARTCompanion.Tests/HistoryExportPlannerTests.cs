@@ -290,12 +290,13 @@ public class HistoryExportPlannerTests
         Assert.DoesNotContain("excluded", summary);
     }
 
-    private static LootHistoryEntry Entry(string? instance = null, long? difficultyId = null, string? difficulty = null)
+    private static LootHistoryEntry Entry(string? instance = null, long? difficultyId = null, string? difficulty = null, long? rollId = null)
     {
         var fields = new Dictionary<string, object?>();
         if (instance != null) fields["instance"] = instance;
         if (difficultyId != null) fields["difficultyID"] = (double)difficultyId.Value;
         if (difficulty != null) fields["difficulty"] = difficulty;
+        if (rollId != null) fields["rollID"] = (double)rollId.Value;
         return new LootHistoryEntry(fields);
     }
 
@@ -329,6 +330,88 @@ public class HistoryExportPlannerTests
     public void RaidDisplay_NeitherPresent_ReturnsEmptyString()
     {
         Assert.Equal("", HistoryExportPlanner.RaidDisplay(Entry()));
+    }
+
+    // The lootmaster typed /kart add outside the raid, so the addon had no instance to read. The
+    // difficulty it did know still has to carry, same as any other award.
+    [Fact]
+    public void RaidDisplay_ManualRollIdWithoutInstance_SaysManualAddAndKeepsTheDifficulty()
+    {
+        var entry = Entry(instance: null, difficultyId: 16, rollId: 528998);
+
+        Assert.Equal("manual add — Mythic", HistoryExportPlanner.RaidDisplay(entry));
+    }
+
+    [Fact]
+    public void RaidDisplay_ManualRollIdWithNoDifficultyEither_SaysManualAddAlone()
+    {
+        var entry = Entry(instance: null, rollId: 528998);
+
+        Assert.Equal("manual add", HistoryExportPlanner.RaidDisplay(entry));
+    }
+
+    // Literals on both sides of the boundary, deliberately NOT written as AddonManualRollIdBase - 1:
+    // a bound expressed in terms of the constant moves with it and can never catch the constant
+    // being wrong. 500000 is the addon's MANUAL_ROLL_ID_BASE, copied here from LootCouncil.lua.
+    //
+    // The base itself is a manual roll id — the addon seeds at base + time() % 100000, and that
+    // remainder is zero once every 100000 seconds. An exclusive comparison would drop that award.
+    [Fact]
+    public void RaidDisplay_RollIdExactlyAtTheManualBase_CountsAsAManualAdd()
+    {
+        Assert.Equal("manual add", HistoryExportPlanner.RaidDisplay(Entry(rollId: 500000)));
+    }
+
+    [Fact]
+    public void RaidDisplay_RollIdJustBelowTheManualBase_IsNotAManualAdd()
+    {
+        var entry = Entry(instance: null, difficultyId: 16, rollId: 499999);
+
+        Assert.Equal("Mythic", HistoryExportPlanner.RaidDisplay(entry));
+    }
+
+    // The copy itself, against the addon's LootCouncil.lua. The two boundary cases above pin the
+    // behaviour at 500000 but would both still pass if the constant and they moved together; this
+    // is the one assertion that fails when only the constant moves.
+    [Fact]
+    public void AddonManualRollIdBase_MatchesTheAddonsConstant()
+    {
+        Assert.Equal(500000, HistoryExportPlanner.AddonManualRollIdBase);
+    }
+
+    // The harmful flank, held down explicitly: Blizzard's roll ids are a per-session counter — 1..29
+    // across the maintainer's whole real file — and an award of theirs with no instance is a genuine
+    // gap. It must keep looking like one instead of being excused as an ordinary manual add.
+    [Fact]
+    public void RaidDisplay_BlizzardRollIdWithoutInstance_StillRendersAsAGap()
+    {
+        Assert.Equal("Mythic", HistoryExportPlanner.RaidDisplay(Entry(difficultyId: 16, rollId: 29)));
+    }
+
+    // Separate Fact rather than a second Assert in the one above: a failing assertion ends its test,
+    // so a case sharing a test with a case that breaks first is never actually observed failing.
+    [Fact]
+    public void RaidDisplay_BlizzardRollIdAndNoDifficulty_StillRendersAsAnEmptyCell()
+    {
+        Assert.Equal("", HistoryExportPlanner.RaidDisplay(Entry(rollId: 29)));
+    }
+
+    // No roll id at all — the field is absent, not zero. Lifted comparison must not treat that as
+    // manual, and must not throw either.
+    [Fact]
+    public void RaidDisplay_NoRollIdAtAll_StillRendersAsAGap()
+    {
+        Assert.Equal("", HistoryExportPlanner.RaidDisplay(Entry(rollId: null)));
+    }
+
+    // A manual add made while standing in the raid does have an instance, and the real raid name is
+    // the more useful thing to show — the label never displaces one.
+    [Fact]
+    public void RaidDisplay_ManualRollIdWithAnInstance_ShowsTheInstanceNotTheLabel()
+    {
+        var entry = Entry(instance: "March on Quel'Danas", difficultyId: 16, rollId: 528998);
+
+        Assert.Equal("March on Quel'Danas — Mythic", HistoryExportPlanner.RaidDisplay(entry));
     }
 
     [Fact]

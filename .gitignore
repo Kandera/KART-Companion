@@ -4,3 +4,12 @@ publish/
 *.user
 .worktrees/
 .vscode/mcp.json
+
+# Internal working notes (plans, specs, reviews) — kept local, same rule the
+# addon repo already carries.
+docs/superpowers/
+
+# Working directory of the subagent-driven-development runs (ledger, briefs,
+# reports, review diffs). Scaffolding: what has to survive a run is the code and
+# its comments, and those are tracked.
+.superpowers/

@@ -308,6 +308,34 @@ public class CompanionShellFormTests
         });
     }
 
+    // The other half of the same switch, and the half that cannot be seen while the window is the
+    // thing being looked at: Form.Text is the window's TASKBAR BUTTON, its Alt-Tab entry and its
+    // task-switcher label. It is the only thing that says what this window is when it is not on
+    // screen, and nothing asserted it — the subtitle above is the on-screen half and was pinned, this
+    // one was named in the last report and left.
+    //
+    // The whole caption and not just the screen's own title: "Loot History" alone in the task
+    // switcher does not say whose, and a tray application's window is found by that entry rather than
+    // by being where the user left it. The screen's half is interpolated rather than spelled out, so
+    // this says "the caption follows the current screen" and leaves what the screens are called to
+    // the test above.
+    [WinFormsFact]
+    public void TheWindowsCaption_NamesTheApplication_AndWhicheverScreenIsCurrent()
+    {
+        WithShell((shell, settings, history) =>
+        {
+            var navIcons = WinFormsHarness.Descendants(WinFormsHarness.Find<Panel>(shell, "Rail"))
+                .Where(c => c.Name == "NavIcon").ToList();
+
+            Assert.Equal($"KART Companion — {settings.Title}", shell.Text);
+
+            WinFormsHarness.RaiseClick(navIcons[1]);
+            WinFormsHarness.Pump();
+
+            Assert.Equal($"KART Companion — {history.Title}", shell.Text);
+        });
+    }
+
     // --- the window's own shape ---
 
     // FormBorderStyle.None leaves no OS-drawn edge, so the rounded card the mockup asks for is a
@@ -730,6 +758,49 @@ public class CompanionShellFormTests
         }, TwoScreens().WorkingAreaOf);
     }
 
+    /// <summary>
+    /// THE DELIBERATE HALF, PINNED SO THAT CHANGING IT IS A DECISION AND NOT A SLIP: the cut is one
+    /// way. Nothing remembers what the minimum was before a small screen took it away, so a window
+    /// that visits one keeps the smaller minimum for the rest of the session even after it is dragged
+    /// back somewhere roomy. CompanionShell's MinimumSize override says exactly that in its own
+    /// remarks, and until now said "there is no test either way".
+    ///
+    /// It is a real behaviour and not an absence: the user's window can be made smaller than its
+    /// content wants for the rest of the session, which the override argues is a usable window and
+    /// the lesser of the two costs. The alternative — remembering the requested minimum and restoring
+    /// it on the way back — is a second stored size that has to be kept in step with the screens' own
+    /// minimums, and it is one five-line change away. This test is what makes that change announce
+    /// itself: MEASURED, implementing the grow-back turns this red and leaves every other test in
+    /// this file green, so without it the design would move without anyone deciding to move it.
+    ///
+    /// Over the invented layout, so it is not vacuous on a single-display machine and not vacuous on
+    /// windows-latest — see InventedScreens.
+    /// </summary>
+    [WinFormsFact]
+    public void AMinimumCutDownOnASmallScreen_IsNotGrownBack_WhenTheWindowLeavesAgain()
+    {
+        WithStubShell(SmallScreens(), (shell, _) =>
+        {
+            shell.Location = new Point(400, 0);
+            WinFormsHarness.Pump();
+
+            // Fits the roomy screen in both dimensions, and is too tall for the tight one.
+            shell.MinimumSize = new Size(380, 300);
+            WinFormsHarness.Pump();
+            Assert.Equal(new Size(380, 300), shell.MinimumSize);
+
+            shell.Location = new Point(0, 0);
+            WinFormsHarness.Pump();
+            Assert.Equal(new Size(380, 200), shell.MinimumSize);
+
+            // Back where it started, with room for the whole 300 again.
+            shell.Location = new Point(400, 0);
+            WinFormsHarness.Pump();
+
+            Assert.Equal(new Size(380, 200), shell.MinimumSize);
+        }, TwoScreens().WorkingAreaOf);
+    }
+
     // --- the screens inside the frame ---
 
     // Each screen's view is anchored to all four edges, and the anchors are set AFTER the view has
@@ -797,12 +868,14 @@ public class CompanionShellFormTests
     /// </summary>
     private sealed class StubScreen : IScreen
     {
-        public StubScreen(string title, Size viewSize, Size minimumViewSize, bool wantsEscape = false)
+        public StubScreen(
+            string title, Size viewSize, Size minimumViewSize, bool wantsEscape = false, bool wantsEnter = false)
         {
             Title = title;
             View = new Panel { Name = "StubView", Size = viewSize };
             MinimumViewSize = minimumViewSize;
             if (wantsEscape) CancelButton = new Button { Name = "StubCancel" };
+            if (wantsEnter) AcceptButton = new Button { Name = "StubAccept" };
         }
 
         public string Title { get; }
@@ -812,7 +885,15 @@ public class CompanionShellFormTests
         public Size ViewSizeAsBuilt => View.Size;
         public Color? StatusColor => null;
         public IButtonControl? CancelButton { get; }
+        public IButtonControl? AcceptButton { get; }
         public event EventHandler? StatusChanged { add { } remove { } }
+
+        /// <summary>How many times this screen has been told it has become the current one. The real
+        /// history screen re-reads the archive from that call, so "how many times" is the whole
+        /// question — see the test that counts it.</summary>
+        public int TimesShown { get; private set; }
+
+        public void OnShown() => TimesShown++;
     }
 
     /// <summary>The shell over screens this test supplies, with the icon it was handed available to
@@ -909,6 +990,88 @@ public class CompanionShellFormTests
         });
     }
 
+    // Enter, the other half of the same two lines — and deliberately NOT the same shape as Escape.
+    // A Form has one AcceptButton, so it follows whichever screen is showing; but there is no
+    // frame-level fallback behind it, because closing is safe on every screen and no action every
+    // screen agrees on exists for Enter. So a screen that supplies none leaves Enter doing nothing,
+    // and that absence is as much a decision as the fallback next to it.
+    //
+    // MEASURED BEFORE IT WAS WRITTEN: deleting the AcceptButton line altogether left the whole suite
+    // green, so the settings screen's OK button — which the product really does hand over — was
+    // Enter's target only by luck of nobody having changed the line.
+    [WinFormsFact]
+    public void EnterBelongsToWhicheverScreenWantsIt_AndToNothingWhenTheCurrentScreenDoesNot()
+    {
+        var wantsEnter = new StubScreen("Accepts", new Size(600, 400), new Size(300, 200), wantsEnter: true);
+        var doesNot = new StubScreen("Does not", new Size(600, 400), new Size(300, 200));
+
+        WithStubShell(new[] { wantsEnter, doesNot }, (shell, _) =>
+        {
+            Assert.Same(wantsEnter.AcceptButton, shell.AcceptButton);
+
+            var navIcons = WinFormsHarness.Descendants(WinFormsHarness.Find<Panel>(shell, "Rail"))
+                .Where(c => c.Name == "NavIcon").ToList();
+            WinFormsHarness.RaiseClick(navIcons[1]);
+            WinFormsHarness.Pump();
+
+            // Not merely "something else": nothing at all. The screen just left keeps its own button,
+            // and a frame that went on offering it would fire the previous screen's OK on Enter.
+            Assert.Null(shell.AcceptButton);
+        });
+    }
+
+    /// <summary>
+    /// Navigating to a screen tells it so; navigating to the one you are already on does not; and
+    /// coming back to a screen you left tells it again. Nothing watched any of the three.
+    ///
+    /// Every one of them is load-bearing. The history screen re-reads the archive from
+    /// <see cref="IScreen.OnShown"/>, because what it draws is a snapshot of a file the tray and the
+    /// background sync write while this window is open — a screen never told it has become current
+    /// shows a stale list for the rest of the session. Re-clicking the rail icon for the screen you
+    /// are ALREADY on used to run the whole switch again, which re-read the archive and threw the
+    /// user's selection away for no reason at all. And the guard that fixed that is written on
+    /// <c>_started</c> rather than on <c>screen == Current</c> alone, because Current is already the
+    /// first screen before the constructor's own switch runs and that one has to run in full or the
+    /// window opens showing nothing.
+    ///
+    /// Counted rather than flagged: "was it told" cannot tell a screen told once from a screen told
+    /// three times, and the defect this is about is the second telling.
+    /// </summary>
+    [WinFormsFact]
+    public void AScreenIsToldItHasBecomeCurrent_OnceEachTimeItDoes_AndNotWhenItAlreadyWas()
+    {
+        var first = new StubScreen("First", new Size(600, 400), new Size(300, 200));
+        var second = new StubScreen("Second", new Size(600, 400), new Size(300, 200));
+
+        WithStubShell(new[] { first, second }, (shell, _) =>
+        {
+            var navIcons = WinFormsHarness.Descendants(WinFormsHarness.Find<Panel>(shell, "Rail"))
+                .Where(c => c.Name == "NavIcon").ToList();
+
+            // The constructor's own switch: the screen the window opens on has been shown, the other
+            // has not.
+            Assert.Equal(1, first.TimesShown);
+            Assert.Equal(0, second.TimesShown);
+
+            WinFormsHarness.RaiseClick(navIcons[1]);
+            WinFormsHarness.Pump();
+            Assert.Equal(1, second.TimesShown);
+
+            // The icon for the screen already showing, clicked again: nothing happens, and in the
+            // real history screen "nothing" is what keeps the user's selection.
+            WinFormsHarness.RaiseClick(navIcons[1]);
+            WinFormsHarness.Pump();
+            Assert.Equal(1, second.TimesShown);
+            Assert.Equal(1, first.TimesShown);
+
+            // And back: a screen returned to is re-read, because the file behind it may have moved on
+            // while the other screen was up.
+            WinFormsHarness.RaiseClick(navIcons[0]);
+            WinFormsHarness.Pump();
+            Assert.Equal(2, first.TimesShown);
+        });
+    }
+
     // The icon Windows shows for this window — in the task switcher, in Alt-Tab, and on the taskbar
     // button — and where the window first appears. Neither is visible to any other test here: the
     // suite never shows the window, which is the whole point of the harness, so these are asserted as
@@ -925,6 +1088,52 @@ public class CompanionShellFormTests
             // window back by if it opens somewhere unhelpful, and a tray application's window is
             // summoned rather than found.
             Assert.Equal(FormStartPosition.CenterScreen, shell.StartPosition);
+        });
+    }
+
+    // Neither box, on a window that draws no box to press. FormBorderStyle.None means there is no
+    // caption bar and so no maximise or minimise button to disable — what these two still govern is
+    // everything the SYSTEM offers without one: the Alt+Space window menu's Maximize and Minimize
+    // entries, Win+Up and Win+Down, and double-clicking a taskbar preview. Both are false so that a
+    // borderless card cannot be put into a state it has no chrome to get out of — there is no title
+    // bar to restore a maximised one by, and the close glyph is the only affordance the window
+    // carries. Nothing observed either of them before this test.
+    //
+    // The premise is asserted with them rather than assumed, because the sentence above is only true
+    // while the frame is borderless: with a border back these two would be visible buttons and their
+    // being false would be a different decision about a different window.
+    [WinFormsFact]
+    public void TheWindow_OffersNeitherMaximiseNorMinimise()
+    {
+        var only = new StubScreen("Only", new Size(600, 400), new Size(300, 200));
+
+        WithStubShell(new[] { only }, (shell, _) =>
+        {
+            Assert.Equal(FormBorderStyle.None, shell.FormBorderStyle);
+            Assert.False(shell.MaximizeBox, "The card can be maximised, and has no title bar to restore itself by.");
+            Assert.False(shell.MinimizeBox, "The card can be minimised by the system, and draws nothing that would bring it back.");
+        });
+    }
+
+    // The frame's own two colours. Every panel, label and glyph on this window picks its colour from
+    // Theme itself, so they would all keep theirs through a regression that left the FORM at the OS
+    // default — and the result on screen is a light grey window ringing a dark interior, in the strip
+    // the rail does not cover and behind every AutoSize label. Nothing here asserted the window's own
+    // colours at all.
+    //
+    // WHAT THIS CANNOT CATCH, and is not meant to: a change to what Theme.Background IS. Both sides
+    // of the assertion move together, and pinning the ARGB here would be pinning a design decision in
+    // a shell test. What it catches is the form being styled from the wrong token, or — the mutant
+    // that matters — not styled at all.
+    [WinFormsFact]
+    public void TheWindow_WearsTheThemesOwnBackgroundAndText()
+    {
+        var only = new StubScreen("Only", new Size(600, 400), new Size(300, 200));
+
+        WithStubShell(new[] { only }, (shell, _) =>
+        {
+            Assert.Equal(Theme.Background, shell.BackColor);
+            Assert.Equal(Theme.Text, shell.ForeColor);
         });
     }
 }

@@ -338,7 +338,11 @@ public sealed class CompanionShell : Form
     /// the session even after it is dragged back to a large one. The cost is a window that can be
     /// made smaller than its content would like — which the paragraph above says is usable — and the
     /// alternative is a second stored size that has to be kept in step with the screens' own
-    /// minimums. Recorded rather than fixed; there is no test either way.
+    /// minimums. Recorded rather than fixed — and now PINNED in the direction it was decided:
+    /// CompanionShellFormTests.AMinimumCutDownOnASmallScreen_IsNotGrownBack_WhenTheWindowLeavesAgain
+    /// drives a window onto a small invented screen and back off it, and goes red the moment the
+    /// grow-back is implemented (MEASURED, against exactly that five-line change). So changing this
+    /// is a decision someone takes and rewrites a test for, not a slip nothing notices.
     /// </summary>
     public override Size MinimumSize
     {

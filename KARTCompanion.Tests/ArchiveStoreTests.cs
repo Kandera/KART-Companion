@@ -299,4 +299,23 @@ public class ArchiveStoreTests : IDisposable
 
         Assert.Equal("a1", award.Key);
     }
+
+    [Fact]
+    public void WowUtilsReceipt_SurvivesSaveAndLoad()
+    {
+        var when = DateTimeOffset.FromUnixTimeSeconds(1786090821);
+        var doc = new ArchiveDocument();
+        doc.Awards.Add(new ArchivedAward
+        {
+            Fields = new Dictionary<string, object?> { ["id"] = "award-1" },
+            WowUtilsImportedAt = when,
+            WowUtilsConfirmUncertainAt = when.AddMinutes(1),
+        });
+
+        ArchiveStore.Save(doc, Path_);
+        var award = Assert.Single(ArchiveStore.Load(Path_).Awards);
+
+        Assert.Equal(when, award.WowUtilsImportedAt);
+        Assert.Equal(when.AddMinutes(1), award.WowUtilsConfirmUncertainAt);
+    }
 }

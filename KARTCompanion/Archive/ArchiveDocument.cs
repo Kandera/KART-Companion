@@ -31,6 +31,18 @@ public sealed class ArchivedAward
     public DateTimeOffset? ExportedByCompanionAt { get; set; }
 
     /// <summary>
+    /// Set when WowUtils classified this award id as a duplicate, or accepted it on confirm.
+    /// Not an export stamp: ExportedByCompanionAt stays the clipboard mark and is not this.
+    /// </summary>
+    public DateTimeOffset? WowUtilsImportedAt { get; set; }
+
+    /// <summary>
+    /// Set immediately before a confirm call for this id, and cleared when a receipt is written.
+    /// A later preview that calls this id new must not confirm.
+    /// </summary>
+    public DateTimeOffset? WowUtilsConfirmUncertainAt { get; set; }
+
+    /// <summary>
     /// The maintainer's corrections, field name to corrected value. Empty when the award was never
     /// edited.
     ///

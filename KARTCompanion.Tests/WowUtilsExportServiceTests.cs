@@ -67,6 +67,22 @@ public class WowUtilsExportServiceTests
     }
 
     [Fact]
+    public async Task Run_ConfirmNon200WithMatchingAccepted_LeavesUncertainAndDoesNotReceipt()
+    {
+        var doc = Doc(Award("a"));
+        var transport = new FakeTransport(
+            previewBody: Results(("a", "new")),
+            confirmBody: """{"accepted":["a"]}""",
+            confirmStatus: 500);
+
+        await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
+
+        Assert.Equal(1, transport.ConfirmCalls);
+        Assert.Null(doc.Awards.Single().WowUtilsImportedAt);
+        Assert.Equal(Now, doc.Awards.Single().WowUtilsConfirmUncertainAt);
+    }
+
+    [Fact]
     public async Task Run_LaterPreviewCallsUncertainIdNew_DoesNotConfirm()
     {
         var doc = Doc(Award("a", uncertain: Now));

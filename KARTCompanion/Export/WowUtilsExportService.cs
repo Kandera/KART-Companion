@@ -63,7 +63,8 @@ public static class WowUtilsExportService
         if (confirmResult.StatusCode is 401 or 403)
             return LoginMessage;
 
-        if (!TryParseAccepted(confirmResult.Body, out var accepted) ||
+        if (confirmResult.StatusCode != 200 ||
+            !TryParseAccepted(confirmResult.Body, out var accepted) ||
             !ConfirmSetMatches(decision.ConfirmIds, accepted))
             return ConfirmMismatchMessage;
 

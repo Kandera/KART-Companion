@@ -185,6 +185,49 @@ public class HistoryScreenFormTests
         });
     }
 
+    [Fact]
+    public void ExportButton_IsDisabledWhenCaptureIsMissing()
+    {
+        WinFormsHarness.Run(() =>
+        {
+            var screen = new HistoryScreen(new[] { Award("a") }, () => new ArchiveDocument(), _ => { }, uploadEnabled: false);
+            try
+            {
+                WinFormsHarness.RealiseHandles(screen.View);
+                WinFormsHarness.Pump();
+                var button = WinFormsHarness.Find<Button>(screen.View, "ExportToWowUtilsButton");
+                Assert.Equal("Export to WowUtils", button.Text);
+                Assert.False(button.Enabled);
+            }
+            finally
+            {
+                screen.View.Dispose();
+                WinFormsHarness.Pump();
+            }
+        });
+    }
+
+    [Fact]
+    public void ExportButton_IsEnabledWhenCaptureIsPresent_EvenWithNothingSelected()
+    {
+        WinFormsHarness.Run(() =>
+        {
+            var screen = new HistoryScreen(Array.Empty<ArchivedAward>(), () => new ArchiveDocument(), _ => { }, uploadEnabled: true);
+            try
+            {
+                WinFormsHarness.RealiseHandles(screen.View);
+                WinFormsHarness.Pump();
+                var button = WinFormsHarness.Find<Button>(screen.View, "ExportToWowUtilsButton");
+                Assert.True(button.Enabled);
+            }
+            finally
+            {
+                screen.View.Dispose();
+                WinFormsHarness.Pump();
+            }
+        });
+    }
+
     /// <summary>The gap the list keeps to each of its view's edges — the thing anchoring is actually
     /// about, stated without repeating any of the screen's private layout constants.</summary>
     private static Padding MarginsIn(Control view, Control list) =>

@@ -3,11 +3,12 @@ using System.Runtime.InteropServices;
 using KARTCompanion.Archive;
 using KARTCompanion.Export;
 using KARTCompanion.SavedVariables;
+using KARTCompanion.WowUtils;
 
 namespace KARTCompanion.Shell;
 
 /// <summary>
-/// Browses the loot-history archive and exports a selection to WoWUtils. The archive is the one
+/// Browses the loot-history archive and exports eligible awards to WowUtils. The archive is the one
 /// place a withdrawn award (the addon deleted its own row) still exists, so it is always shown, never
 /// hidden — just marked and excluded from anything exported.
 ///
@@ -25,7 +26,7 @@ namespace KARTCompanion.Shell;
 ///
 /// This screen deliberately holds no ArchiveDocument. What it keeps is a display snapshot — the list
 /// of awards it last drew — and the archive itself is re-read for every decision that has consequences
-/// (see OnCopy/OnSaveCopy and HistoryExportPlanner.ExportAndStamp). The shell is modeless: the tray's
+/// (see OnExport/OnSaveCopy). The shell is modeless: the tray's
 /// "Read loot history now" and the background sync merge into their own documents and save while this
 /// window sits open, so a document held here would be stale from the moment it was handed over, and
 /// deciding from it is what once put a since-withdrawn award on the clipboard.
@@ -52,6 +53,9 @@ public sealed class HistoryScreen : IScreen
 
     private readonly Func<ArchiveDocument> _loadArchive;
     private readonly Action<ArchiveDocument> _saveArchive;
+    private readonly bool _uploadEnabled;
+    private readonly Func<LootHistoryImporter?>? _createImporter;
+    private readonly Action? _refreshFromSavedVariables;
     private readonly Panel _view;
     private readonly ListView _listView;
     private readonly ComboBox _playerCombo;
@@ -88,7 +92,7 @@ public sealed class HistoryScreen : IScreen
     // Enter and Escape belong to whichever screen is showing. They used to be wired to the Settings
     // screen's OK and Cancel for the lifetime of the window, so Enter here saved settings and closed
     // the window from a screen that has no OK button on it (see CompanionShell.SwitchTo). Nothing on
-    // this screen is safe to trigger by pressing Enter — Copy stamps an export — so it offers none.
+    // this screen is safe to trigger by pressing Enter — Export stamps WowUtilsImportedAt — so it offers none.
     public IButtonControl? AcceptButton => null;
     public IButtonControl? CancelButton => null;
 
@@ -111,12 +115,23 @@ public sealed class HistoryScreen : IScreen
     /// over, and saving an empty document over the one file the game has already forgotten is the
     /// worst outcome this program has.</param>
     /// <param name="saveArchive">Persists the archive after an export has been stamped.</param>
+    /// <param name="uploadEnabled">The capture gate: the export button is enabled only when a WowUtils import capture is present, not when a row is selected.</param>
+    /// <param name="createImporter">Builds the WowUtils importer, or null when no login is stored.</param>
+    /// <param name="refreshFromSavedVariables">Re-reads loot history from SavedVariables before an upload so the archive is current.</param>
     public HistoryScreen(
-        IReadOnlyList<ArchivedAward> awards, Func<ArchiveDocument> loadArchive, Action<ArchiveDocument> saveArchive)
+        IReadOnlyList<ArchivedAward> awards,
+        Func<ArchiveDocument> loadArchive,
+        Action<ArchiveDocument> saveArchive,
+        bool uploadEnabled = false,
+        Func<LootHistoryImporter?>? createImporter = null,
+        Action? refreshFromSavedVariables = null)
     {
         _awards = awards;
         _loadArchive = loadArchive;
         _saveArchive = saveArchive;
+        _uploadEnabled = uploadEnabled;
+        _createImporter = createImporter;
+        _refreshFromSavedVariables = refreshFromSavedVariables;
         // Sized before anything is placed in it, because everything below is placed at a pixel
         // offset that assumes this size and then anchored to an edge of it. WinForms anchoring keeps
         // the gap a control had to its parent's edges at the moment the parent is resized, so a
@@ -235,12 +250,13 @@ public sealed class HistoryScreen : IScreen
         // The whole footer is anchored to the bottom-left corner and nothing else: these are actions
         // and sentences, both of which belong under the start of the list rather than spread across
         // however wide the window has been dragged.
-        _copyButton = Theme.CreateButton("Copy for WoWUtils", primary: true);
+        _copyButton = Theme.CreateButton("Export to WowUtils", primary: true);
+        _copyButton.Name = "ExportToWowUtilsButton";
         _copyButton.Left = ContentLeft;
         _copyButton.Top = 580;
-        _copyButton.Width = 170;
+        _copyButton.Width = 190;
         _copyButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-        _copyButton.Click += (_, _) => OnCopy();
+        _copyButton.Click += (_, _) => OnExport();
 
         _saveButton = Theme.CreateButton("Save a copy…");
         _saveButton.Left = _copyButton.Right + 10;
@@ -573,8 +589,8 @@ public sealed class HistoryScreen : IScreen
             .Select(i => _filtered[i])
             .ToList();
 
-    // The keys of what is selected. Keys rather than the award objects themselves, because both
-    // export paths re-read the archive and act on ITS awards — the objects in this list belong to a
+    // The keys of what is selected. Keys rather than the award objects themselves, because Save a
+    // copy re-reads the archive and acts on ITS awards — the objects in this list belong to a
     // snapshot that may already be out of date (see this class's own remarks).
     private List<string> SelectedKeys() => SelectedAwards().Select(a => a.Key).ToList();
 
@@ -629,80 +645,49 @@ public sealed class HistoryScreen : IScreen
         SetResult(HistoryExportPlanner.EditSummary(outcome.Award), ResultKind.Success);
     }
 
-    // Copy for WoWUtils. Everything that matters happens inside
-    // HistoryExportPlanner.ExportAndStamp: the archive is re-read, what goes is decided in THAT
-    // document, the clipboard gets it, and only then is the mark stamped and the file saved.
-    //
-    // Deciding there rather than here is the fix for the one guarantee this window had been breaking.
-    // The shell is modeless: while it sits open, the tray's "Read loot history now" and the
-    // background sync merge and save their own documents, and a merge can mark an award Withdrawn
-    // because the addon deleted its own row. This window's list still showed it as open, and a Copy
-    // sent it — "a withdrawn award is never exported, whatever is selected" failed for exactly as
-    // long as the list was stale, which was the whole session.
-    //
-    // The snapshot this screen draws from is adopted only once the whole sequence has succeeded; on
-    // failure it is untouched, so there is nothing to roll back.
-    private void OnCopy()
+    // The upload is the whole eligible archive, not the list selection. WowUtilsExportService.Run
+    // re-reads, previews, confirms, and stamps WowUtilsImportedAt. After a successful Run the list
+    // is redrawn from the archive that call just saved — ReloadFromArchive, not a second rebuild.
+    private async void OnExport()
     {
-        // Captured from the display snapshot before AdoptSnapshot below replaces it — what the
-        // footer promised, so the result line can say when reality disagreed with it either way
-        // (see ExportDiscrepancyNote).
-        var displaySelected = SelectedAwards();
-        var selectedCount = displaySelected.Count;
-        var shownExportableCount = HistoryExportPlanner.AwardsToExport(displaySelected).Count;
-
-        // Which step failed decides what the user is being told and what they have to do about it,
-        // and only the call site can tell them apart — the three exceptions are otherwise identical.
-        var loaded = false;
-        var delivered = false;
-        HistoryExportPlanner.ExportOutcome outcome;
+        if (!_uploadEnabled || _createImporter == null)
+        {
+            SetResult("WowUtils import is not captured yet. Nothing was imported.", ResultKind.Error);
+            return;
+        }
+        var importer = _createImporter();
+        if (importer == null)
+        {
+            SetResult("Paste the WowUtils login in Settings. Nothing was imported.", ResultKind.Error);
+            return;
+        }
+        _copyButton.Enabled = false;
         try
         {
-            outcome = HistoryExportPlanner.ExportAndStamp(
-                displaySelected.Select(a => a.Key).ToList(), DateTimeOffset.UtcNow,
-                () => { var fresh = _loadArchive(); loaded = true; return fresh; },
-                awards =>
-                {
-                    // Clipboard.SetText throws on an empty string, but ExportAndStamp does not call
-                    // this at all when there is nothing to send.
-                    Clipboard.SetText(RcLootCouncilJsonWriter.Write(awards.Select(a => new LootHistoryEntry(a.EffectiveFields))));
-                    delivered = true;
-                },
-                _saveArchive);
+            var message = await WowUtilsExportService.Run(
+                _loadArchive,
+                _saveArchive,
+                _refreshFromSavedVariables,
+                importer,
+                uploadEnabled: true,
+                hasCredential: true,
+                DateTimeOffset.Now);
+            SetResult(message, ResultKind.Success);
+            ReloadFromArchive();
         }
         catch (Exception ex)
         {
-            // A clipboard manager, an RDP session or another app can transiently hold the clipboard
-            // open (CLIPBRD_E_CANT_OPEN) and WinForms already retries internally; a failure after
-            // the text is on the clipboard instead means the awards went out unrecorded, which is
-            // the one of the three the user has to act on.
-            var message = !loaded
-                ? $"The archive could not be read, so nothing was copied: {ex.Message}"
-                : !delivered
-                    ? $"Could not copy to the clipboard: {ex.Message}"
-                    : $"Copied to the clipboard, but the export could not be recorded: {ex.Message}. Exporting again from the addon may send them a second time.";
-            SetResult(message, ResultKind.Error);
-            return;
+            SetResult(ex.Message, ResultKind.Error);
         }
-
-        AdoptSnapshot(outcome.Document.Awards);
-
-        if (outcome.Exported.Count == 0)
+        finally
         {
-            SetResult("Nothing was exported — every selected award is withdrawn or excluded.", ResultKind.Neutral);
-            return;
+            UpdateFooter();
         }
-
-        // The list drawn on screen can disagree with what actually went, in either direction — an
-        // award withdrawn since the list was drawn is left out silently otherwise, and "Copied 11"
-        // against 12 selected rows is the kind of quiet discrepancy that gets explained away; the
-        // reverse (a withdrawal reversed since the list was drawn) sends more than the list promised.
-        var note = HistoryExportPlanner.ExportDiscrepancyNote(selectedCount, shownExportableCount, outcome.Exported.Count);
-        SetResult($"Copied {outcome.Exported.Count} award(s) to the clipboard and marked them exported.{note}", ResultKind.Success);
     }
 
     // A copy for keeping, not the export of record — writes the same text to a file but never
-    // touches ExportedByCompanionAt. It re-reads the archive all the same, because the withdrawn
+    // touches ExportedByCompanionAt or WowUtilsImportedAt. It re-reads the archive all the same,
+    // because the withdrawn
     // rule is not about stamping: an award the addon has taken back must not be in a file the
     // maintainer later pastes somewhere either.
     private void OnSaveCopy()
@@ -774,11 +759,9 @@ public sealed class HistoryScreen : IScreen
             ? "Some of these were already exported by the Companion but not the addon — exporting again from the addon will send them a second time; WoWUtils does not dedup."
             : "";
 
-        // Nothing selected means nothing exported, so neither button offers to do anything. There is
-        // no unmark and no undo for a stamped export, which makes "export everything by pressing the
-        // primary button with nothing selected" a destructive default — and one that fires again if
-        // the user presses the button a second time to check the first press worked.
-        _copyButton.Enabled = exportable.Count > 0;
+        // The upload is the whole eligible archive, not the list selection. The button is the capture
+        // gate: without a capture there is nothing to talk to. Save a copy stays selection-based.
+        _copyButton.Enabled = _uploadEnabled;
         _saveButton.Enabled = exportable.Count > 0;
 
         // Exactly one row: a correction is a statement about one award, and there is no sensible

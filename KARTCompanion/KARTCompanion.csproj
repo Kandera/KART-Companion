@@ -15,4 +15,8 @@
     <EmbeddedResource Include="Assets\KAimg.jpg" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\KARTCompanion.Tests\Fixtures\wowutils-loot-import.capture.json" Link="Fixtures\wowutils-loot-import.capture.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

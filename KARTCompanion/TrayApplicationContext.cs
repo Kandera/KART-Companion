@@ -24,6 +24,8 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private CompanionConfig _config;
     private readonly SyncGate _syncGate = new();
+    private static readonly string CapturePath =
+        Path.Combine(AppContext.BaseDirectory, "Fixtures", "wowutils-loot-import.capture.json");
     private bool _errorShown;
     private CompanionShell? _shell;
 
@@ -167,7 +169,17 @@ public sealed class TrayApplicationContext : ApplicationContext
         // ArchiveStore.Load/Save, not a wrapper that answers an empty document on failure: the
         // screen saves through this after an export, and an empty document saved over the archive
         // would destroy the only copy of everything the game has already forgotten.
-        var historyScreen = new HistoryScreen(archiveDoc.Awards, ArchiveStore.Load, ArchiveStore.Save);
+        var historyScreen = new HistoryScreen(
+            archiveDoc.Awards,
+            ArchiveStore.Load,
+            ArchiveStore.Save,
+            uploadEnabled: LootHistoryImportCapture.Load(CapturePath).IsEnabled,
+            createImporter: () =>
+            {
+                if (string.IsNullOrWhiteSpace(_config.ImportCredential)) return null;
+                return new LootHistoryImporter(_httpClient, LootHistoryImportCapture.Load(CapturePath), _config.ImportCredential);
+            },
+            refreshFromSavedVariables: () => ReadLootHistory(announceNothingNew: false));
 
         _shell = new CompanionShell(new IScreen[] { settingsScreen, historyScreen }, _logo, _appIcon);
         _shell.FormClosed += (_, _) =>

@@ -166,6 +166,20 @@ public sealed class TrayApplicationContext : ApplicationContext
             ShowUnexpectedError($"The loot history archive could not be opened: {ex.Message}");
             archiveDoc = new ArchiveDocument();
         }
+        bool uploadEnabled;
+        try
+        {
+            uploadEnabled = LootHistoryImportCapture.Load(CapturePath).IsEnabled;
+        }
+        catch (Exception ex)
+        {
+            // A missing or unreadable capture fixture must not escape after _syncTimer.Stop()
+            // above — that would leave automatic syncing off until restart. Upload stays disabled;
+            // the window still opens so settings and the archive list remain usable.
+            ShowUnexpectedError($"The import capture fixture could not be read: {ex.Message}");
+            uploadEnabled = false;
+        }
+
         // ArchiveStore.Load/Save, not a wrapper that answers an empty document on failure: the
         // screen saves through this after an export, and an empty document saved over the archive
         // would destroy the only copy of everything the game has already forgotten.
@@ -173,7 +187,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             archiveDoc.Awards,
             ArchiveStore.Load,
             ArchiveStore.Save,
-            uploadEnabled: LootHistoryImportCapture.Load(CapturePath).IsEnabled,
+            uploadEnabled: uploadEnabled,
             createImporter: () =>
             {
                 if (string.IsNullOrWhiteSpace(_config.ImportCredential)) return null;

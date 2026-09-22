@@ -9,12 +9,10 @@ namespace KARTCompanion.Export;
 /// Emits the same RCLootCouncil-compatible JSON the addon's own LH.BuildRCLootCouncilJSON produces,
 /// field for field, so the maintainer can paste either one into a tool built to read that format.
 ///
-/// <c>itemID</c>, <c>subType</c> and <c>equipLoc</c> all come, on the addon's side, from a single
-/// call to C_Item.GetItemInfoInstant — the running game client's item database. The Companion has no
-/// such database and no equivalent API, so all three are always emitted empty/zero here, never parsed
-/// out of the item link even where that would be possible for the id alone. That is not a shortcut:
-/// it is what keeps this writer matching the addon's own behavior for any item that client has not
-/// (yet) cached, which is the same "unresolved" case the addon itself falls back to a zero id for.
+/// <c>id</c> is the award id stored on the row, empty when the row has none. <c>itemID</c> is parsed
+/// from the item link when present, else zero. <c>instance</c> is the instance name from the row.
+/// <c>subType</c> and <c>equipLoc</c> still come, on the addon's side, from C_Item.GetItemInfoInstant;
+/// the Companion has no item database and emits both empty here.
 ///
 /// <c>Write</c> always sorts newest-first and ignores the order it was given awards in. Every real
 /// caller wants exactly this — it is what LH.BuildRCLootCouncilJSON's own default (no explicit list)
@@ -31,6 +29,7 @@ public static class RcLootCouncilJsonWriter
     // |H(item:...)|h — the item string exactly as the client wrote it, matched by delimiter so no
     // assumption is made about which separators a given client build uses inside it.
     private static readonly Regex ItemStringPattern = new(@"\|H(item:[^|]+)\|h", RegexOptions.Compiled);
+    private static readonly Regex ItemIdPattern = new(@"item:(\d+)", RegexOptions.Compiled);
 
     // The display name inside a hyperlink's brackets: |c...|Hitem:...|h[Name]|h|r.
     private static readonly Regex ItemNamePattern = new(@"\[(.*?)\]", RegexOptions.Compiled);
@@ -47,12 +46,12 @@ public static class RcLootCouncilJsonWriter
         var objects = new List<string>();
         for (var i = 0; i < list.Count; i++)
         {
-            objects.Add(WriteObject(list[i], i + 1, zone));
+            objects.Add(WriteObject(list[i], zone));
         }
         return "[" + string.Join(",", objects) + "]";
     }
 
-    private static string WriteObject(LootHistoryEntry e, int index, TimeZoneInfo timeZone)
+    private static string WriteObject(LootHistoryEntry e, TimeZoneInfo timeZone)
     {
         var time = e.Time;
         var localTime = TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(time), timeZone);
@@ -62,16 +61,15 @@ public static class RcLootCouncilJsonWriter
             JsonString("player", e.Winner ?? ""),
             JsonString("date", localTime.ToString("yyyy/MM/dd", CultureInfo.InvariantCulture)),
             JsonString("time", localTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture)),
-            JsonString("id", $"{time}-{index}"),
-            JsonNumber("itemID", 0),
+            JsonString("id", e.Id ?? ""),
+            JsonNumber("itemID", ItemIdFromLink(e.Item)),
             JsonString("itemString", GetItemString(e.Item)),
             JsonString("response", e.Reason ?? ""),
             JsonNumber("votes", 0),
             JsonString("class", e.Class ?? ""),
-            // "instance" carries the difficulty here, not the instance name — that is the addon's
-            // own field layout (LH.BuildRCLootCouncilJSON), matched deliberately, not a bug to fix.
-            JsonString("instance", DifficultyNames.Canonical(e)),
-            JsonString("boss", ""),
+            JsonString("instance", e.Instance ?? ""),
+            JsonString("boss", e.Boss ?? ""),
+            JsonString("difficulty", DifficultyNames.Canonical(e)),
             JsonString("gear1", ""),
             JsonString("gear2", ""),
             JsonString("responseID", "0"),
@@ -86,6 +84,15 @@ public static class RcLootCouncilJsonWriter
             JsonString("servertime", time.ToString(CultureInfo.InvariantCulture)),
         };
         return "{" + string.Join(",", fields) + "}";
+    }
+
+    private static long ItemIdFromLink(string? link)
+    {
+        if (string.IsNullOrEmpty(link)) return 0;
+        var m = ItemIdPattern.Match(link);
+        return m.Success && long.TryParse(m.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var id)
+            ? id
+            : 0;
     }
 
     private static string GetItemString(string? link)

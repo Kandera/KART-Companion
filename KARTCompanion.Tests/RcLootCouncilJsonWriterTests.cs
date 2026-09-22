@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using KARTCompanion.Export;
@@ -52,24 +53,20 @@ public class RcLootCouncilJsonWriterTests
         // (descending) agree, independent of how ties within one second are broken.
         Assert.Equal(expectedRows.Select(r => r.ServerTime), actualRows.Select(r => r.ServerTime));
 
-        // 2. Group by servertime and compare each group as an unordered multiset of rows, with the
-        // id's positional suffix blanked out. This proves every other field, the field order inside
-        // the object, the escaping, the date/time derivation and the difficulty mapping -- for all
-        // 133 rows -- without asserting anything about which of several same-second awards comes first.
-        var expectedGroups = GroupByServertime(expectedRows);
-        var actualGroups = GroupByServertime(actualRows);
-        Assert.Equal(expectedGroups.Keys.OrderBy(k => k, StringComparer.Ordinal),
-            actualGroups.Keys.OrderBy(k => k, StringComparer.Ordinal));
-        foreach (var key in expectedGroups.Keys)
-        {
-            Assert.Equal(expectedGroups[key], actualGroups[key]);
-        }
+    }
 
-        // 3. id is positional within the exported list: "<servertime>-<i>" for i = 1..N.
-        for (var i = 0; i < actualRows.Count; i++)
-        {
-            Assert.Equal($"{actualRows[i].ServerTime}-{i + 1}", actualRows[i].Id);
-        }
+    [Fact]
+    public void Write_RealFixture_SortsNewestFirst_AndDoesNotInventIds()
+    {
+        var entries = LootHistoryReader.Read(File.ReadAllText(FixturePath("loot-history-real.lua")));
+        var json = RcLootCouncilJsonWriter.Write(entries, GoldenTimeZone);
+        using var doc = JsonDocument.Parse(json);
+        var rows = doc.RootElement.EnumerateArray().ToList();
+
+        Assert.Equal(entries.Count, rows.Count);
+        var times = rows.Select(r => long.Parse(r.GetProperty("servertime").GetString()!, CultureInfo.InvariantCulture)).ToList();
+        Assert.Equal(times.OrderByDescending(t => t), times);
+        Assert.All(rows, r => Assert.Equal("", r.GetProperty("id").GetString()));
     }
 
     [Fact]
@@ -78,19 +75,51 @@ public class RcLootCouncilJsonWriterTests
         Assert.Equal("[]", RcLootCouncilJsonWriter.Write(Array.Empty<LootHistoryEntry>()));
     }
 
-    // The id is positional within the exported list, exactly as the addon builds it. Two awards with
-    // the same timestamp must therefore still get different ids.
     [Fact]
-    public void Write_TwoAwardsAtTheSameSecond_GetDistinctIds()
+    public void Write_AwardId_StaysPutWhenANewerAwardIsInserted()
     {
-        var a = new LootHistoryEntry(new Dictionary<string, object?> { ["time"] = 100d, ["winner"] = "A" });
-        var b = new LootHistoryEntry(new Dictionary<string, object?> { ["time"] = 100d, ["winner"] = "B" });
+        var older = Entry(("id", "award-old"), ("time", 100d), ("winner", "A"));
+        var newer = Entry(("id", "award-new"), ("time", 200d), ("winner", "B"));
 
-        var json = RcLootCouncilJsonWriter.Write(new[] { a, b });
+        var first = RcLootCouncilJsonWriter.Write(new[] { older });
+        var second = RcLootCouncilJsonWriter.Write(new[] { newer, older });
 
-        Assert.Contains("\"id\":\"100-1\"", json);
-        Assert.Contains("\"id\":\"100-2\"", json);
+        Assert.Contains("\"id\":\"award-old\"", first);
+        Assert.Contains("\"id\":\"award-old\"", second);
+        Assert.DoesNotContain("100-1", second);
+        Assert.DoesNotContain("100-2", second);
     }
+
+    [Fact]
+    public void Write_ItemIdBossAndInstance_ComeFromTheRow()
+    {
+        var entry = Entry(
+            ("id", "award-1"),
+            ("time", 100d),
+            ("item", "|cnIQ4:|Hitem:249915::::::::90:253:::::::::|h[Extinction Guards]|h|r"),
+            ("boss", "Dimensius"),
+            ("instance", "March on Quel'Danas"),
+            ("difficultyID", 16d));
+
+        var json = RcLootCouncilJsonWriter.Write(new[] { entry });
+
+        Assert.Contains("\"itemID\":249915", json);
+        Assert.Contains("\"boss\":\"Dimensius\"", json);
+        Assert.Contains("\"instance\":\"March on Quel'Danas\"", json);
+        Assert.Contains("\"difficulty\":\"Mythic\"", json);
+    }
+
+    [Fact]
+    public void Write_MissingId_EmitsAnEmptyId()
+    {
+        var entry = Entry(("time", 100d), ("winner", "A"));
+        var json = RcLootCouncilJsonWriter.Write(new[] { entry });
+        Assert.Contains("\"id\":\"\"", json);
+        Assert.DoesNotContain("100-1", json);
+    }
+
+    private static LootHistoryEntry Entry(params (string Key, object? Value)[] fields) =>
+        new(fields.ToDictionary(f => f.Key, f => f.Value));
 
     // Free text reaches this output. A quote or a newline that is not escaped produces JSON the
     // other end cannot parse, and the failure surfaces at WoWUtils, not here.

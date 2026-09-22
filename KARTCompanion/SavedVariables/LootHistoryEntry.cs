@@ -30,6 +30,7 @@ public sealed class LootHistoryEntry
     public string? Difficulty => Get<string>("difficulty");
     public long? DifficultyId => Num("difficultyID");
     public string? Instance => Get<string>("instance");
+    public string? Boss => Get<string>("boss");
     public long? InstanceId => Num("instanceID");
     public string? Id => Get<string>("id");
     public long? Epoch => Num("epoch");

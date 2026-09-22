@@ -5,13 +5,21 @@ using KARTCompanion.WowUtils;
 
 namespace KARTCompanion.Export;
 
+public enum ExportResultKind
+{
+    Success,
+    Error,
+}
+
+public sealed record ExportResult(ExportResultKind Kind, string Message);
+
 public static class WowUtilsExportService
 {
     private const string NotCapturedMessage = "WowUtils import is not captured yet. Nothing was imported.";
     private const string LoginMessage = "Paste the WowUtils login in Settings. Nothing was imported.";
     private const string ConfirmMismatchMessage = "WowUtils did not name the imported awards. Nothing further was imported.";
 
-    public static async Task<string> Run(
+    public static async Task<ExportResult> Run(
         Func<ArchiveDocument> load,
         Action<ArchiveDocument> save,
         Action? refresh,
@@ -22,10 +30,10 @@ public static class WowUtilsExportService
         CancellationToken cancellationToken = default)
     {
         if (!uploadEnabled)
-            return NotCapturedMessage;
+            return Fail(NotCapturedMessage);
 
         if (!hasCredential)
-            return LoginMessage;
+            return Fail(LoginMessage);
 
         refresh?.Invoke();
         var doc = load();
@@ -37,20 +45,21 @@ public static class WowUtilsExportService
         var previewResult = await transport.PreviewAsync(previewJson, cancellationToken);
 
         if (previewResult.StatusCode is 401 or 403)
-            return LoginMessage;
+            return Fail(LoginMessage);
 
         var preview = PreviewBodyParser.Parse(previewResult.Body);
         var decision = WowUtilsUploadPlanner.Decide(previewed, preview, skipped);
 
         if (decision.Stopped)
-            return decision.Message;
+            return Fail(decision.Message);
 
         WowUtilsUploadPlanner.ApplyReceipts(doc.Awards, decision.ReceiptIds, now);
 
+        // Nothing left to confirm: duplicates already stamped, or there was nothing new to send.
         if (decision.ConfirmIds.Count == 0)
         {
             save(doc);
-            return decision.Message;
+            return Ok(decision.Message);
         }
 
         WowUtilsUploadPlanner.MarkUncertain(doc.Awards, decision.ConfirmIds, now);
@@ -61,17 +70,21 @@ public static class WowUtilsExportService
         var confirmResult = await transport.ConfirmAsync(confirmJson, cancellationToken);
 
         if (confirmResult.StatusCode is 401 or 403)
-            return LoginMessage;
+            return Fail(LoginMessage);
 
         if (confirmResult.StatusCode != 200 ||
             !TryParseAccepted(confirmResult.Body, out var accepted) ||
             !ConfirmSetMatches(decision.ConfirmIds, accepted))
-            return ConfirmMismatchMessage;
+            return Fail(ConfirmMismatchMessage);
 
         WowUtilsUploadPlanner.ApplyReceipts(doc.Awards, accepted, now);
         save(doc);
-        return decision.Message;
+        return Ok(decision.Message);
     }
+
+    private static ExportResult Ok(string message) => new(ExportResultKind.Success, message);
+
+    private static ExportResult Fail(string message) => new(ExportResultKind.Error, message);
 
     private static string? EffectiveId(ArchivedAward award) =>
         award.EffectiveFields.TryGetValue("id", out var v) ? v as string : null;

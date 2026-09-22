@@ -14,11 +14,12 @@ public class WowUtilsExportServiceTests
     {
         var transport = new FakeTransport();
         var doc = Doc(Award("a"));
-        var message = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, uploadEnabled: false, hasCredential: true, Now);
+        var result = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, uploadEnabled: false, hasCredential: true, Now);
 
         Assert.Equal(0, transport.PreviewCalls);
         Assert.Equal(0, transport.ConfirmCalls);
-        Assert.Contains("not captured", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(ExportResultKind.Error, result.Kind);
+        Assert.Contains("not captured", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -28,8 +29,9 @@ public class WowUtilsExportServiceTests
         ArchiveDocument? saved = null;
         var doc = Doc(Award("a"));
 
-        await WowUtilsExportService.Run(() => doc, d => saved = d, null, transport, true, true, Now);
+        var result = await WowUtilsExportService.Run(() => doc, d => saved = d, null, transport, true, true, Now);
 
+        Assert.Equal(ExportResultKind.Success, result.Kind);
         Assert.Equal(1, transport.PreviewCalls);
         Assert.Equal(0, transport.ConfirmCalls);
         Assert.Equal(Now, saved!.Awards.Single().WowUtilsImportedAt);
@@ -45,8 +47,9 @@ public class WowUtilsExportServiceTests
             confirmBody: """{"accepted":["a"]}""",
             onConfirm: _ => savedBeforeConfirm = Snapshot(doc));
 
-        await WowUtilsExportService.Run(() => doc, d => { }, null, transport, true, true, Now);
+        var result = await WowUtilsExportService.Run(() => doc, d => { }, null, transport, true, true, Now);
 
+        Assert.Equal(ExportResultKind.Success, result.Kind);
         Assert.NotNull(savedBeforeConfirm!.Awards.Single().WowUtilsConfirmUncertainAt);
         Assert.Null(savedBeforeConfirm.Awards.Single().WowUtilsImportedAt);
         Assert.Equal(Now, doc.Awards.Single().WowUtilsImportedAt);
@@ -59,8 +62,10 @@ public class WowUtilsExportServiceTests
         var doc = Doc(Award("a"));
         var transport = new FakeTransport(previewBody: Results(("a", "new")), confirmBody: """{"ok":true}""");
 
-        await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
+        var result = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
 
+        Assert.Equal(ExportResultKind.Error, result.Kind);
+        Assert.Contains("Nothing further was imported", result.Message);
         Assert.Equal(1, transport.ConfirmCalls);
         Assert.Null(doc.Awards.Single().WowUtilsImportedAt);
         Assert.Equal(Now, doc.Awards.Single().WowUtilsConfirmUncertainAt);
@@ -75,8 +80,10 @@ public class WowUtilsExportServiceTests
             confirmBody: """{"accepted":["a"]}""",
             confirmStatus: 500);
 
-        await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
+        var result = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
 
+        Assert.Equal(ExportResultKind.Error, result.Kind);
+        Assert.Contains("Nothing further was imported", result.Message);
         Assert.Equal(1, transport.ConfirmCalls);
         Assert.Null(doc.Awards.Single().WowUtilsImportedAt);
         Assert.Equal(Now, doc.Awards.Single().WowUtilsConfirmUncertainAt);
@@ -88,10 +95,12 @@ public class WowUtilsExportServiceTests
         var doc = Doc(Award("a", uncertain: Now));
         var transport = new FakeTransport(previewBody: Results(("a", "new")));
 
-        var message = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
+        var result = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
 
+        Assert.Equal(ExportResultKind.Error, result.Kind);
         Assert.Equal(0, transport.ConfirmCalls);
-        Assert.Contains("came back as new", message);
+        Assert.Contains("came back as new", result.Message);
+        Assert.Contains("Nothing was imported", result.Message);
     }
 
     [Theory]
@@ -102,11 +111,12 @@ public class WowUtilsExportServiceTests
         var doc = Doc(Award("a"));
         var transport = new FakeTransport(previewStatus: status);
 
-        var message = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
+        var result = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
 
+        Assert.Equal(ExportResultKind.Error, result.Kind);
         Assert.Equal(0, transport.ConfirmCalls);
         Assert.Null(doc.Awards.Single().WowUtilsImportedAt);
-        Assert.Contains("login", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("login", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -116,12 +126,13 @@ public class WowUtilsExportServiceTests
         var doc = Doc(Award("a"));
         var transport = new FakeTransport(previewBody: Results(("a", "duplicate")));
 
-        await WowUtilsExportService.Run(
+        var result = await WowUtilsExportService.Run(
             () => { order.Add("load"); return doc; },
             _ => { },
             () => order.Add("refresh"),
             transport, true, true, Now);
 
+        Assert.Equal(ExportResultKind.Success, result.Kind);
         Assert.Equal(new[] { "refresh", "load" }, order);
     }
 

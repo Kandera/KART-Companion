@@ -54,7 +54,7 @@ public sealed class HistoryScreen : IScreen
     private readonly Func<ArchiveDocument> _loadArchive;
     private readonly Action<ArchiveDocument> _saveArchive;
     private readonly bool _uploadEnabled;
-    private readonly Func<LootHistoryImporter?>? _createImporter;
+    private readonly Func<ILootHistoryImportTransport?>? _createImporter;
     private readonly Action? _refreshFromSavedVariables;
     private readonly Panel _view;
     private readonly ListView _listView;
@@ -75,6 +75,7 @@ public sealed class HistoryScreen : IScreen
     private IReadOnlyList<ArchivedAward> _awards;
     private IReadOnlyList<ArchivedAward> _filtered = Array.Empty<ArchivedAward>();
     private bool _suspendFilter;
+    private bool _exportRunning;
 
     public string Title => "Loot History";
     public Theme.IconGlyph Glyph => Theme.IconGlyph.List;
@@ -116,14 +117,14 @@ public sealed class HistoryScreen : IScreen
     /// worst outcome this program has.</param>
     /// <param name="saveArchive">Persists the archive after an export has been stamped.</param>
     /// <param name="uploadEnabled">The capture gate: the export button is enabled only when a WowUtils import capture is present, not when a row is selected.</param>
-    /// <param name="createImporter">Builds the WowUtils importer, or null when no login is stored.</param>
+    /// <param name="createImporter">Builds the WowUtils transport, or null when no login is stored.</param>
     /// <param name="refreshFromSavedVariables">Re-reads loot history from SavedVariables before an upload so the archive is current.</param>
     public HistoryScreen(
         IReadOnlyList<ArchivedAward> awards,
         Func<ArchiveDocument> loadArchive,
         Action<ArchiveDocument> saveArchive,
         bool uploadEnabled = false,
-        Func<LootHistoryImporter?>? createImporter = null,
+        Func<ILootHistoryImportTransport?>? createImporter = null,
         Action? refreshFromSavedVariables = null)
     {
         _awards = awards;
@@ -275,6 +276,7 @@ public sealed class HistoryScreen : IScreen
         _countLabel = FooterLabel(622);
         _noticeLabel = FooterLabel(644);
         _resultLabel = FooterLabel(666);
+        _resultLabel.Name = "HistoryResultLabel";
 
         _view.Controls.AddRange(new Control[]
         {
@@ -650,6 +652,9 @@ public sealed class HistoryScreen : IScreen
     // is redrawn from the archive that call just saved — ReloadFromArchive, not a second rebuild.
     private async void OnExport()
     {
+        if (_exportRunning)
+            return;
+
         if (!_uploadEnabled || _createImporter == null)
         {
             SetResult("WowUtils import is not captured yet. Nothing was imported.", ResultKind.Error);
@@ -661,10 +666,14 @@ public sealed class HistoryScreen : IScreen
             SetResult("Paste the WowUtils login in Settings. Nothing was imported.", ResultKind.Error);
             return;
         }
+
+        _exportRunning = true;
         _copyButton.Enabled = false;
+        _saveButton.Enabled = false;
+        _editButton.Enabled = false;
         try
         {
-            var message = await WowUtilsExportService.Run(
+            var result = await WowUtilsExportService.Run(
                 _loadArchive,
                 _saveArchive,
                 _refreshFromSavedVariables,
@@ -672,7 +681,7 @@ public sealed class HistoryScreen : IScreen
                 uploadEnabled: true,
                 hasCredential: true,
                 DateTimeOffset.Now);
-            SetResult(message, ResultKind.Success);
+            SetResult(result.Message, result.Kind == ExportResultKind.Success ? ResultKind.Success : ResultKind.Error);
             ReloadFromArchive();
         }
         catch (Exception ex)
@@ -681,6 +690,7 @@ public sealed class HistoryScreen : IScreen
         }
         finally
         {
+            _exportRunning = false;
             UpdateFooter();
         }
     }
@@ -761,12 +771,23 @@ public sealed class HistoryScreen : IScreen
 
         // The upload is the whole eligible archive, not the list selection. The button is the capture
         // gate: without a capture there is nothing to talk to. Save a copy stays selection-based.
-        _copyButton.Enabled = _uploadEnabled;
-        _saveButton.Enabled = exportable.Count > 0;
+        // An export in flight keeps all three off. This also runs from the selection handler and from
+        // the reload at the end of Run, so the in-flight rule lives here.
+        if (_exportRunning)
+        {
+            _copyButton.Enabled = false;
+            _saveButton.Enabled = false;
+            _editButton.Enabled = false;
+        }
+        else
+        {
+            _copyButton.Enabled = _uploadEnabled;
+            _saveButton.Enabled = exportable.Count > 0;
 
-        // Exactly one row: a correction is a statement about one award, and there is no sensible
-        // meaning for "apply this player name to twelve of them".
-        _editButton.Enabled = _listView.SelectedIndices.Count == 1;
+            // Exactly one row: a correction is a statement about one award, and there is no sensible
+            // meaning for "apply this player name to twelve of them".
+            _editButton.Enabled = _listView.SelectedIndices.Count == 1;
+        }
     }
 }
 

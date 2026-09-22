@@ -1,7 +1,9 @@
 using System.Drawing;
 using System.Windows.Forms;
+using KARTCompanion;
 using KARTCompanion.Archive;
 using KARTCompanion.Shell;
+using KARTCompanion.WowUtils;
 
 namespace KARTCompanion.Tests;
 
@@ -226,6 +228,128 @@ public class HistoryScreenFormTests
                 WinFormsHarness.Pump();
             }
         });
+    }
+
+    [Fact]
+    public void ExportClick_MissingLogin_ShowsTheErrorResult()
+    {
+        WinFormsHarness.Run(() =>
+        {
+            var screen = new HistoryScreen(
+                new[] { Award("a") },
+                () => new ArchiveDocument(),
+                _ => { },
+                uploadEnabled: true,
+                createImporter: () => null);
+            try
+            {
+                WinFormsHarness.RealiseHandles(screen.View);
+                WinFormsHarness.Pump();
+                WinFormsHarness.RaiseClick(WinFormsHarness.Find<Button>(screen.View, "ExportToWowUtilsButton"));
+                WinFormsHarness.Pump();
+
+                var result = WinFormsHarness.Find<Label>(screen.View, "HistoryResultLabel");
+                Assert.Equal("Paste the WowUtils login in Settings. Nothing was imported.", result.Text);
+                Assert.Equal(Theme.Error, result.ForeColor);
+            }
+            finally
+            {
+                screen.View.Dispose();
+                WinFormsHarness.Pump();
+            }
+        });
+    }
+
+    [Fact]
+    public void ExportClick_WhenPreviewIsUnauthorized_ShowsAnErrorAndHoldsEditAndSave()
+    {
+        WinFormsHarness.Run(() =>
+        {
+            if (SynchronizationContext.Current is not WindowsFormsSynchronizationContext)
+                SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
+
+            var gate = new TaskCompletionSource<ImportCallResult>();
+            var transport = new HoldingTransport(gate.Task);
+            var award = Award("a");
+            var screen = new HistoryScreen(
+                new[] { award },
+                () => new ArchiveDocument { Awards = new List<ArchivedAward> { award } },
+                _ => { },
+                uploadEnabled: true,
+                createImporter: () => transport);
+            try
+            {
+                WinFormsHarness.RealiseHandles(screen.View);
+                WinFormsHarness.Pump();
+
+                var list = WinFormsHarness.Find<ListView>(screen.View, "HistoryList");
+                list.SelectedIndices.Add(0);
+                WinFormsHarness.Pump();
+
+                var export = WinFormsHarness.Find<Button>(screen.View, "ExportToWowUtilsButton");
+                var save = ButtonNamed(screen.View, "Save a copy…");
+                var edit = ButtonNamed(screen.View, "Edit award…");
+                Assert.True(export.Enabled);
+                Assert.True(save.Enabled);
+                Assert.True(edit.Enabled);
+
+                WinFormsHarness.RaiseClick(export);
+                Assert.False(export.Enabled);
+                Assert.False(save.Enabled);
+                Assert.False(edit.Enabled);
+                Assert.Equal(1, transport.PreviewCalls);
+
+                WinFormsHarness.RaiseClick(export);
+                Assert.Equal(1, transport.PreviewCalls);
+                Assert.Equal(0, transport.ConfirmCalls);
+
+                gate.SetResult(new ImportCallResult(401, null));
+                WinFormsHarness.Pump();
+
+                var result = WinFormsHarness.Find<Label>(screen.View, "HistoryResultLabel");
+                Assert.Equal("Paste the WowUtils login in Settings. Nothing was imported.", result.Text);
+                Assert.Equal(Theme.Error, result.ForeColor);
+                Assert.NotEqual(Theme.Success, result.ForeColor);
+                Assert.True(export.Enabled);
+                Assert.False(save.Enabled);
+                Assert.False(edit.Enabled);
+                Assert.Equal(0, transport.ConfirmCalls);
+            }
+            finally
+            {
+                screen.View.Dispose();
+                WinFormsHarness.Pump();
+            }
+        });
+    }
+
+    private static Button ButtonNamed(Control root, string text)
+    {
+        var matches = WinFormsHarness.Descendants(root).OfType<Button>().Where(b => b.Text == text).ToList();
+        Assert.True(matches.Count == 1, $"Expected exactly one button \"{text}\", found {matches.Count}.");
+        return matches[0];
+    }
+
+    private sealed class HoldingTransport : ILootHistoryImportTransport
+    {
+        private readonly Task<ImportCallResult> _preview;
+
+        public HoldingTransport(Task<ImportCallResult> preview) => _preview = preview;
+
+        public int PreviewCalls { get; private set; }
+        public int ConfirmCalls { get; private set; }
+
+        public Task<ImportCallResult> PreviewAsync(string json, CancellationToken cancellationToken)
+        {
+            PreviewCalls++;
+            return _preview;
+        }
+
+        public Task<ImportCallResult> ConfirmAsync(string json, CancellationToken cancellationToken)
+        {
+            ConfirmCalls++;
+            return Task.FromResult(new ImportCallResult(200, """{"accepted":[]}"""));
+        }
     }
 
     /// <summary>The gap the list keeps to each of its view's edges — the thing anchoring is actually

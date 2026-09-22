@@ -27,7 +27,7 @@ public sealed class SettingsScreen : IScreen
     private const int CardGap = 20;
     private const int CardWidth = (ContentWidth - CardGap) / 2;
     private const int CardTop = 114;
-    private const int CardHeight = 180;
+    private const int CardHeight = 260;
     private const int CardPadding = 20;
 
     private readonly Panel _view;

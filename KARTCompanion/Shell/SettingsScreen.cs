@@ -32,6 +32,7 @@ public sealed class SettingsScreen : IScreen
 
     private readonly Panel _view;
     private readonly TextBox _groupKeyBox;
+    private readonly TextBox _importCredentialBox;
     private readonly TextBox _wowPathBox;
     private readonly TextBox _intervalBox;
     private readonly Theme.ToggleSwitch _autoSyncToggle;
@@ -123,7 +124,14 @@ public sealed class SettingsScreen : IScreen
         groupKeyRow.Top = groupKeyLabel.Top + 22;
         _groupKeyBox.Text = current.GroupKey ?? "";
 
-        var wowPathLabel = new Label { Text = "WoW install folder (contains \"_retail_\"):", Left = CardPadding, Top = groupKeyRow.Top + groupKeyRow.Height + 20, AutoSize = true };
+        var importCredentialLabel = new Label { Text = "WowUtils login:", Left = CardPadding, Top = groupKeyRow.Top + groupKeyRow.Height + 20, AutoSize = true };
+        Theme.StyleLabel(importCredentialLabel, dim: true);
+        var importCredentialRow = Theme.CreateInputRow(fieldWidth, 38, Theme.IconGlyph.Key, out _importCredentialBox, passwordChar: true);
+        importCredentialRow.Left = CardPadding;
+        importCredentialRow.Top = importCredentialLabel.Top + 22;
+        _importCredentialBox.Text = current.ImportCredential ?? "";
+
+        var wowPathLabel = new Label { Text = "WoW install folder (contains \"_retail_\"):", Left = CardPadding, Top = importCredentialRow.Top + importCredentialRow.Height + 20, AutoSize = true };
         Theme.StyleLabel(wowPathLabel, dim: true);
         var browseButton = Theme.CreateButton("Browse...", surfaceColor: Theme.Panel);
         browseButton.Width = 74;
@@ -137,7 +145,7 @@ public sealed class SettingsScreen : IScreen
         wowPathRow.Controls.Add(browseButton);
         _wowPathBox.Text = current.WowInstallPath ?? "";
 
-        connectionCard.Controls.AddRange(new Control[] { groupKeyLabel, groupKeyRow, wowPathLabel, wowPathRow });
+        connectionCard.Controls.AddRange(new Control[] { groupKeyLabel, groupKeyRow, importCredentialLabel, importCredentialRow, wowPathLabel, wowPathRow });
 
         // --- SYNC card: interval + the two toggles ---
         var intervalLabel = new Label { Text = "Sync interval:", Left = CardPadding, Top = CardPadding, AutoSize = true };
@@ -386,6 +394,7 @@ public sealed class SettingsScreen : IScreen
     {
         var config = Result.Copy();
         config.GroupKey = _groupKeyBox.Text.Trim();
+        config.ImportCredential = string.IsNullOrWhiteSpace(_importCredentialBox.Text) ? null : _importCredentialBox.Text.Trim();
         config.WowInstallPath = string.IsNullOrWhiteSpace(_wowPathBox.Text) ? null : _wowPathBox.Text.Trim();
         config.SavedVariablesFilePath = _resolvedSavedVariablesPath;
         config.SyncIntervalMinutes = Math.Clamp(int.TryParse(_intervalBox.Text, out var minutes) ? minutes : 15, 1, 240);

@@ -54,6 +54,7 @@ public class ConfigStoreTests : IDisposable
         var original = new CompanionConfig
         {
             GroupKey = "key",
+            ImportCredential = "session=secret",
             WowInstallPath = @"C:\wow",
             SavedVariablesFilePath = @"C:\wow\sv.lua",
             SyncIntervalMinutes = 42,
@@ -91,5 +92,17 @@ public class ConfigStoreTests : IDisposable
         copy.LootHistoryReadAt[@"D:\other.lua"] = DateTimeOffset.FromUnixTimeSeconds(1785310000);
 
         Assert.Single(original.LootHistoryReadAt);
+    }
+
+    [Fact]
+    public void ImportCredential_SurvivesSave_AndIsNotTheGroupKey()
+    {
+        ConfigStore.Save(new CompanionConfig { GroupKey = "group-key", ImportCredential = "session=secret" }, _configPath);
+
+        var back = JsonSerializer.Deserialize<CompanionConfig>(File.ReadAllText(_configPath));
+
+        Assert.NotNull(back);
+        Assert.Equal("group-key", back!.GroupKey);
+        Assert.Equal("session=secret", back.ImportCredential);
     }
 }

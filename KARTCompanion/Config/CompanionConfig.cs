@@ -9,6 +9,12 @@ public sealed class CompanionConfig
 {
     public string? GroupKey { get; set; }
 
+    /// <summary>
+    /// Header value for the loot-history import host only. Not the group key.
+    /// Plain JSON in config.json, same as GroupKey. Never log it.
+    /// </summary>
+    public string? ImportCredential { get; set; }
+
     /// <summary>The WoW install folder the user browsed to in Settings (contains "_retail_").
     /// Kept only so the Settings dialog can show it back on reopen — sync itself uses
     /// SavedVariablesFilePath, which is resolved from this once and persisted separately.</summary>

@@ -536,6 +536,7 @@ public sealed class HistoryScreen : IScreen
         AwardStatus.ExportedByBoth => "exported (both)",
         AwardStatus.Withdrawn => "withdrawn",
         AwardStatus.Excluded => "excluded",
+        AwardStatus.Imported => "imported",
         _ => status.ToString(),
     };
 

@@ -3,9 +3,9 @@ using KARTCompanion.SavedVariables;
 
 namespace KARTCompanion.Shell;
 
-/// <summary>Settings screen: group key, WoW install folder, sync interval, and a Force Sync
-/// button to test the config immediately without leaving the screen. Layout is unchanged
-/// hand-placed pixel coordinates (see IScreen's doc comment for why that stays), styled to match
+/// <summary>Settings screen: group key, WoW folder, loot-history interval, and a button that
+/// reads loot history from SavedVariables. The loot-council sync does not run from here.
+/// Layout stays hand-placed pixel coordinates (see IScreen's doc comment for why), styled to match
 /// the addon's own branding (Theme.cs, colors lifted from KAimg.jpg).
 ///
 /// Two cards side by side (what you set once, on the left; what runs, on the right), a full-width
@@ -45,11 +45,10 @@ public sealed class SettingsScreen : IScreen
     // IScreen for one field nothing ever releases early would cost more than it buys.
     private readonly ToolTip _statusTooltip = new();
     private readonly Button _forceSyncButton;
-    private readonly Func<CompanionConfig, Task<SyncResult>> _runSync;
+    private readonly Action? _readLootHistory;
     private readonly Panel _liveStatusDot;
 
     private string? _resolvedSavedVariablesPath;
-    private readonly SyncGate _syncGate = new();
     private readonly Size _minimumViewSize;
 
     public string Title => "Settings";
@@ -73,15 +72,14 @@ public sealed class SettingsScreen : IScreen
     public CompanionConfig Result { get; private set; }
 
     /// <summary>Raised once, when OK is pressed, carrying the config to persist. Cancel raises
-    /// nothing — Result stays whatever it was before this session (or whatever a successful
-    /// Force Sync already set it to), so a caller that persists only on this event never
-    /// persists a cancelled edit.</summary>
+    /// nothing — Result stays whatever it was before this session, so a caller that persists
+    /// only on this event never persists a cancelled edit.</summary>
     public event Action<CompanionConfig>? Saved;
 
-    public SettingsScreen(CompanionConfig current, Func<CompanionConfig, Task<SyncResult>> runSync)
+    public SettingsScreen(CompanionConfig current, Action? readLootHistory = null)
     {
         Result = current;
-        _runSync = runSync;
+        _readLootHistory = readLootHistory;
         _resolvedSavedVariablesPath = current.SavedVariablesFilePath;
 
         // Sized before anything is placed in it: every control below is at a fixed offset that
@@ -168,7 +166,7 @@ public sealed class SettingsScreen : IScreen
         _autoSyncToggle = Theme.CreateToggleSwitch(current.AutoSyncEnabled);
         _autoSyncToggle.Left = CardPadding;
         _autoSyncToggle.Top = intervalRow.Top + intervalRow.Height + 20;
-        var autoSyncLabel = new Label { Text = "Sync automatically", AutoSize = true };
+        var autoSyncLabel = new Label { Text = "Read loot history automatically", AutoSize = true };
         Theme.StyleLabel(autoSyncLabel, dim: true);
         autoSyncLabel.Left = _autoSyncToggle.Right + 8;
         autoSyncLabel.Top = _autoSyncToggle.Top + (_autoSyncToggle.Height - autoSyncLabel.PreferredHeight) / 2;
@@ -260,10 +258,10 @@ public sealed class SettingsScreen : IScreen
         // position is LayoutActionRow's, and two mechanisms answering the same question is how they
         // start disagreeing. Anchoring measures from wherever the control was when the view was last
         // resized, which is exactly where LayoutActionRow will have put it.
-        _forceSyncButton = Theme.CreateButton("Force Sync");
+        _forceSyncButton = Theme.CreateButton("Read history");
         _forceSyncButton.Left = ContentLeft;
-        _forceSyncButton.Width = 100;
-        _forceSyncButton.Click += async (_, _) => await OnForceSyncAsync();
+        _forceSyncButton.Width = 110;
+        _forceSyncButton.Click += (_, _) => OnReadHistory();
 
         var cancelButton = Theme.CreateButton("Cancel");
         cancelButton.Left = _forceSyncButton.Right + 8;
@@ -411,42 +409,10 @@ public sealed class SettingsScreen : IScreen
         Saved?.Invoke(Result);
     }
 
-    private async Task OnForceSyncAsync()
+    private void OnReadHistory()
     {
-        if (_syncGate.IsRunning) return;
-
-        var config = BuildResultFromFields();
-        if (!config.IsComplete)
-        {
-            SetStatusText("Enter a group key and pick your WoW folder first.", isError: true);
-            return;
-        }
-
-        _forceSyncButton.Enabled = false;
-        SetStatusText("Syncing...", isError: false);
-
-        var result = await _syncGate.RunAsync(() => _runSync(config));
-
-        if (result is null)
-        {
-            // Another sync was already in progress — leave the "Syncing..." status as-is.
-        }
-        else if (result.Success)
-        {
-            config.LastSyncUtc = DateTimeOffset.UtcNow;
-            Result = config;
-            var skippedNote = result.SkippedCharacters > 0 ? $" ({result.SkippedCharacters} skipped)" : "";
-            SetStatusText($"Synced {result.PlayerCount} players{skippedNote}. SavedVariables file: {config.SavedVariablesFilePath}", StatusKind.Success);
-            UpdateStatusDot(isError: false);
-            _lastSyncLabel.Text = SettingsScreenText.BuildLastSyncText(config.LastSyncUtc);
-        }
-        else
-        {
-            SetStatusText("Sync failed: " + (result.ErrorMessage ?? "unknown error"), isError: true);
-            UpdateStatusDot(isError: true);
-        }
-
-        _forceSyncButton.Enabled = true;
+        SetStatusText("Reading loot history from SavedVariables.", isError: false);
+        _readLootHistory?.Invoke();
     }
 }
 

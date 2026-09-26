@@ -1,7 +1,7 @@
 {
-  "captured": false,
-  "previewUrl": "",
-  "confirmUrl": "",
-  "authHeaderName": "",
-  "note": "Replace this with a redacted DevTools capture of Loot > Ledger > History > Import. Do not put a cookie or token in this file."
+  "captured": true,
+  "previewUrl": "https://wowutils.com/viserio-cooldowns/api/groups/67be2e62bf109f37e7f0b2c5/loot-history/import",
+  "confirmUrl": "https://wowutils.com/viserio-cooldowns/api/groups/67be2e62bf109f37e7f0b2c5/loot-history/import",
+  "authHeaderName": "Cookie",
+  "note": "One POST only. Cookie value lives in Companion settings, not in this file."
 }

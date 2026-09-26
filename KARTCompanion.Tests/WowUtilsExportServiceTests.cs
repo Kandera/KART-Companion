@@ -23,9 +23,9 @@ public class WowUtilsExportServiceTests
     }
 
     [Fact]
-    public async Task Run_AllDuplicate_SavesReceiptsAndDoesNotConfirm()
+    public async Task Run_ChunkAccepted_StampsReceiptsAndDoesNotConfirm()
     {
-        var transport = new FakeTransport(previewBody: Results(("a", "duplicate")));
+        var transport = new FakeTransport(previewBody: """{"inserted":1,"modified":0,"skippedReasons":[]}""");
         ArchiveDocument? saved = null;
         var doc = Doc(Award("a"));
 
@@ -34,73 +34,49 @@ public class WowUtilsExportServiceTests
         Assert.Equal(ExportResultKind.Success, result.Kind);
         Assert.Equal(1, transport.PreviewCalls);
         Assert.Equal(0, transport.ConfirmCalls);
+        Assert.Contains("\"chunkIndex\":0", transport.LastPreviewBody);
+        Assert.Contains("\"entries\":[", transport.LastPreviewBody);
         Assert.Equal(Now, saved!.Awards.Single().WowUtilsImportedAt);
     }
 
     [Fact]
-    public async Task Run_AllNew_MarksUncertainBeforeConfirm_ThenReceiptsOnAccepted()
+    public async Task Run_SkippedReasons_DoesNotReceipt()
     {
         var doc = Doc(Award("a"));
-        ArchiveDocument? savedBeforeConfirm = null;
-        var transport = new FakeTransport(
-            previewBody: Results(("a", "new")),
-            confirmBody: """{"accepted":["a"]}""",
-            onConfirm: _ => savedBeforeConfirm = Snapshot(doc));
-
-        var result = await WowUtilsExportService.Run(() => doc, d => { }, null, transport, true, true, Now);
-
-        Assert.Equal(ExportResultKind.Success, result.Kind);
-        Assert.NotNull(savedBeforeConfirm!.Awards.Single().WowUtilsConfirmUncertainAt);
-        Assert.Null(savedBeforeConfirm.Awards.Single().WowUtilsImportedAt);
-        Assert.Equal(Now, doc.Awards.Single().WowUtilsImportedAt);
-        Assert.Null(doc.Awards.Single().WowUtilsConfirmUncertainAt);
-    }
-
-    [Fact]
-    public async Task Run_ConfirmBodyDoesNotNameIds_LeavesUncertainAndDoesNotReceipt()
-    {
-        var doc = Doc(Award("a"));
-        var transport = new FakeTransport(previewBody: Results(("a", "new")), confirmBody: """{"ok":true}""");
+        var transport = new FakeTransport(previewBody: """{"inserted":0,"modified":0,"skippedReasons":["row 1 invalid"]}""");
 
         var result = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
 
         Assert.Equal(ExportResultKind.Error, result.Kind);
-        Assert.Contains("Nothing further was imported", result.Message);
-        Assert.Equal(1, transport.ConfirmCalls);
-        Assert.Null(doc.Awards.Single().WowUtilsImportedAt);
-        Assert.Equal(Now, doc.Awards.Single().WowUtilsConfirmUncertainAt);
-    }
-
-    [Fact]
-    public async Task Run_ConfirmNon200WithMatchingAccepted_LeavesUncertainAndDoesNotReceipt()
-    {
-        var doc = Doc(Award("a"));
-        var transport = new FakeTransport(
-            previewBody: Results(("a", "new")),
-            confirmBody: """{"accepted":["a"]}""",
-            confirmStatus: 500);
-
-        var result = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
-
-        Assert.Equal(ExportResultKind.Error, result.Kind);
-        Assert.Contains("Nothing further was imported", result.Message);
-        Assert.Equal(1, transport.ConfirmCalls);
-        Assert.Null(doc.Awards.Single().WowUtilsImportedAt);
-        Assert.Equal(Now, doc.Awards.Single().WowUtilsConfirmUncertainAt);
-    }
-
-    [Fact]
-    public async Task Run_LaterPreviewCallsUncertainIdNew_DoesNotConfirm()
-    {
-        var doc = Doc(Award("a", uncertain: Now));
-        var transport = new FakeTransport(previewBody: Results(("a", "new")));
-
-        var result = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
-
-        Assert.Equal(ExportResultKind.Error, result.Kind);
+        Assert.Contains("skipped", result.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, transport.ConfirmCalls);
-        Assert.Contains("came back as new", result.Message);
-        Assert.Contains("Nothing was imported", result.Message);
+        Assert.Null(doc.Awards.Single().WowUtilsImportedAt);
+    }
+
+    [Fact]
+    public async Task Run_NonJsonBody_DoesNotReceipt()
+    {
+        var doc = Doc(Award("a"));
+        var transport = new FakeTransport(previewBody: "<!DOCTYPE html>");
+
+        var result = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
+
+        Assert.Equal(ExportResultKind.Error, result.Kind);
+        Assert.Contains("<!DOCTYPE html>", result.Message);
+        Assert.Null(doc.Awards.Single().WowUtilsImportedAt);
+    }
+
+    [Fact]
+    public async Task Run_Non200_DoesNotReceipt()
+    {
+        var doc = Doc(Award("a"));
+        var transport = new FakeTransport(previewStatus: 404, previewBody: "<!DOCTYPE html>");
+
+        var result = await WowUtilsExportService.Run(() => doc, _ => { }, null, transport, true, true, Now);
+
+        Assert.Equal(ExportResultKind.Error, result.Kind);
+        Assert.Contains("404", result.Message);
+        Assert.Null(doc.Awards.Single().WowUtilsImportedAt);
     }
 
     [Theory]
@@ -124,7 +100,7 @@ public class WowUtilsExportServiceTests
     {
         var order = new List<string>();
         var doc = Doc(Award("a"));
-        var transport = new FakeTransport(previewBody: Results(("a", "duplicate")));
+        var transport = new FakeTransport(previewBody: """{"inserted":0,"modified":1,"skippedReasons":[]}""");
 
         var result = await WowUtilsExportService.Run(
             () => { order.Add("load"); return doc; },
@@ -154,12 +130,15 @@ public class WowUtilsExportServiceTests
     }
 
     [Fact]
-    public void CaptureFixture_IsNotEnabled()
+    public void CaptureFixture_PointsAtTheLootHistoryImport()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "wowutils-loot-import.capture.json");
         var capture = LootHistoryImportCapture.Load(path);
 
-        Assert.False(capture.IsEnabled);
+        Assert.True(capture.IsEnabled);
+        Assert.Contains("/loot-history/import", capture.PreviewUrl, StringComparison.Ordinal);
+        Assert.Equal(capture.PreviewUrl, capture.ConfirmUrl);
+        Assert.Equal("Cookie", capture.AuthHeaderName);
     }
 
     private static ArchiveDocument Doc(params ArchivedAward[] awards) => new() { Awards = awards.ToList() };
@@ -213,10 +192,12 @@ public class WowUtilsExportServiceTests
 
         public int PreviewCalls { get; private set; }
         public int ConfirmCalls { get; private set; }
+        public string? LastPreviewBody { get; private set; }
 
         public Task<ImportCallResult> PreviewAsync(string json, CancellationToken cancellationToken)
         {
             PreviewCalls++;
+            LastPreviewBody = json;
             return Task.FromResult(new ImportCallResult(_previewStatus, _previewBody));
         }
 

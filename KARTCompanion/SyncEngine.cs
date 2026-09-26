@@ -1,6 +1,5 @@
 using KARTCompanion.Config;
 using KARTCompanion.Matching;
-using KARTCompanion.SavedVariables;
 using KARTCompanion.WowUtils;
 
 namespace KARTCompanion;
@@ -8,11 +7,8 @@ namespace KARTCompanion;
 public sealed record SyncResult(bool Success, int PlayerCount, int SkippedCharacters, string? ErrorMessage);
 
 /// <summary>
-/// Orchestrates one full sync: fetch droptimizer summaries from WoWUtils, fetch+parse each
-/// character's sim report from whichever source it came from (Raidbots/QE Live), merge into a
-/// CacheModel, and write it into the addon's SavedVariables file. A single character's sim
-/// fetch failing (expired report, unexpected shape, etc.) only skips that character — it never
-/// aborts the whole sync.
+/// Orchestrates one full sync of droptimizer summaries. The SavedVariables write is off:
+/// loot history is read from the game's file, and this engine must not put a cache back into it.
 /// </summary>
 public sealed class SyncEngine
 {
@@ -93,11 +89,7 @@ public sealed class SyncEngine
         };
 
         var config = _getConfig();
-        if (string.IsNullOrWhiteSpace(config.SavedVariablesFilePath))
-            return new SyncResult(false, 0, skipped, "No SavedVariables file path configured.");
-
-        var blockText = LuaTableWriter.WriteAssignment(model);
-        SavedVariablesBlockWriter.WriteBlock(config.SavedVariablesFilePath, blockText);
+        // The loot-council cache is not written back into KeineAhnungRaidTools.lua.
 
         config.LastSyncUtc = model.SyncedAt;
         _saveConfig(config);

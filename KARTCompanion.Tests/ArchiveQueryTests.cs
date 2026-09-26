@@ -43,6 +43,12 @@ public class ArchiveQueryTests
             ArchiveQuery.StatusOf(Award("c", 1, "A", "i", "BIS", companionExported: DateTimeOffset.UnixEpoch)));
         Assert.Equal(AwardStatus.ExportedByBoth,
             ArchiveQuery.StatusOf(Award("d", 1, "A", "i", "BIS", addonExported: true, companionExported: DateTimeOffset.UnixEpoch)));
+        Assert.Equal(AwardStatus.Imported,
+            ArchiveQuery.StatusOf(new ArchivedAward
+            {
+                Fields = new Dictionary<string, object?> { ["id"] = "e", ["time"] = 1d, ["winner"] = "A", ["item"] = "i", ["reason"] = "BIS" },
+                WowUtilsImportedAt = DateTimeOffset.UnixEpoch,
+            }));
     }
 
     // Withdrawn outranks everything: an award that was taken back is not "exported", it is gone.

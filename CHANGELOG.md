@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Failed exports are shown as errors, and a second click is ignored while an export is running.
 
 ### Changed
+- The loot-council sync no longer runs. The timer and **Read history** only read loot history from SavedVariables.
 - Loot history JSON uses the addon's award id. The old time-plus-position id is gone.
 
 ### Removed

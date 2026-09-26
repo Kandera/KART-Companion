@@ -19,6 +19,10 @@ public enum AwardStatus
     /// dropdown, which is built from Enum.GetValues in declaration order, keeps the indices it had —
     /// see HistoryExportPlanner.StatusForComboIndex.</summary>
     Excluded,
+
+    /// <summary>WowUtils accepted this award on import. Declared after Excluded so the existing
+    /// status-filter indices stay put.</summary>
+    Imported,
 }
 
 /// <summary>Answers questions of the archive: what state is this award in, and which awards match a filter.</summary>
@@ -41,6 +45,8 @@ public static class ArchiveQuery
         // exported. Above the export marks, because what matters about this award now is that it will
         // not go again.
         if (award.ExcludedFromExport) return AwardStatus.Excluded;
+
+        if (award.WowUtilsImportedAt != null) return AwardStatus.Imported;
 
         var byAddon = award.Fields.TryGetValue("exported", out var v) && v is true;
         var byCompanion = award.ExportedByCompanionAt != null;

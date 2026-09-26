@@ -87,8 +87,7 @@ public class CompanionShellFormTests
             WinFormsHarness.WithForm(
                 () =>
                 {
-                    settings = new SettingsScreen(
-                        new CompanionConfig(), _ => Task.FromResult(new SyncResult(true, 0, 0, null)));
+                    settings = new SettingsScreen(new CompanionConfig());
                     history = new HistoryScreen(
                         Array.Empty<ArchivedAward>(), () => new ArchiveDocument(), _ => { });
                     logo = AppIcon.LoadLogoBitmap();
@@ -935,7 +934,7 @@ public class CompanionShellFormTests
             var buttons = WinFormsHarness.Descendants(settings.View).OfType<Button>().ToList();
             var ok = buttons.Single(b => b.Text == "OK");
             var cancel = buttons.Single(b => b.Text == "Cancel");
-            var forceSync = buttons.Single(b => b.Text == "Force Sync");
+            var forceSync = buttons.Single(b => b.Text == "Read history");
 
             ThroughAResize(shell, size =>
             {

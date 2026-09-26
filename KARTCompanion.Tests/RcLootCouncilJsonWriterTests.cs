@@ -64,7 +64,7 @@ public class RcLootCouncilJsonWriterTests
         var rows = doc.RootElement.EnumerateArray().ToList();
 
         Assert.Equal(entries.Count, rows.Count);
-        var times = rows.Select(r => long.Parse(r.GetProperty("servertime").GetString()!, CultureInfo.InvariantCulture)).ToList();
+        var times = rows.Select(r => r.GetProperty("servertime").GetInt64()).ToList();
         Assert.Equal(times.OrderByDescending(t => t), times);
         Assert.All(rows, r => Assert.Equal("", r.GetProperty("id").GetString()));
     }
@@ -106,7 +106,71 @@ public class RcLootCouncilJsonWriterTests
         Assert.Contains("\"itemID\":249915", json);
         Assert.Contains("\"boss\":\"Dimensius\"", json);
         Assert.Contains("\"instance\":\"March on Quel'Danas\"", json);
-        Assert.Contains("\"difficulty\":\"Mythic\"", json);
+        Assert.DoesNotContain("difficulty", json);
+    }
+
+    [Fact]
+    public void Write_UsesTheRcDateIdAndResponse()
+    {
+        var entry = Entry(
+            ("id", "1787250681-3"),
+            ("time", 1787257860d),
+            ("dateStr", "2026/08/20"),
+            ("timeStr", "20:31:00"),
+            ("winner", "Shariuchiha-Blackmoore"),
+            ("reason", "Offspec"),
+            ("responseID", 3d),
+            ("instanceLabel", "The Venomous Abyss-Normal"),
+            ("boss", "Ula'tek"),
+            ("votes", 2d),
+            ("owner", "Kandypal-Blackmoore"));
+
+        var json = RcLootCouncilJsonWriter.Write(new[] { entry });
+
+        Assert.Contains("\"date\":\"2026/08/20\"", json);
+        Assert.Contains("\"time\":\"20:31:00\"", json);
+        Assert.Contains("\"responseID\":\"3\"", json);
+        Assert.Contains("\"servertime\":1787250681", json);
+        Assert.Contains("\"instance\":\"The Venomous Abyss-Normal\"", json);
+        Assert.Contains("\"votes\":2", json);
+    }
+
+    [Fact]
+    public void Write_KartHexId_BecomesServertimeAndDecimalSeq()
+    {
+        var hex = Entry(("id", "1790185049-00d"), ("time", 1790185049d), ("winner", "A"));
+        var padded = Entry(("id", "1790185050-011"), ("time", 1790185050d), ("winner", "B"));
+        var rc = Entry(("id", "1790195862-13"), ("time", 1790195862d), ("winner", "C"));
+
+        var json = RcLootCouncilJsonWriter.Write(new[] { hex, padded, rc });
+
+        Assert.Contains("\"id\":\"1790185049-13\"", json);
+        Assert.Contains("\"id\":\"1790185050-17\"", json);
+        Assert.Contains("\"id\":\"1790195862-13\"", json);
+        Assert.Contains("\"servertime\":1790185049", json);
+    }
+
+    [Fact]
+    public void Write_OwnerWithoutRealm_UsesTheWinner()
+    {
+        var missing = Entry(
+            ("time", 100d),
+            ("winner", "Mischkadk-Blackrock"),
+            ("reason", ""));
+        var shortName = Entry(
+            ("time", 90d),
+            ("winner", "Feriamii-Blackhand"),
+            ("owner", "Feriamii"));
+        var otherLooter = Entry(
+            ("time", 80d),
+            ("winner", "Skavie-Blackhand"),
+            ("owner", "Kanderadk-Blackmoore"));
+
+        var json = RcLootCouncilJsonWriter.Write(new[] { missing, shortName, otherLooter });
+
+        Assert.Contains("\"owner\":\"Mischkadk-Blackrock\"", json);
+        Assert.Contains("\"owner\":\"Feriamii-Blackhand\"", json);
+        Assert.Contains("\"owner\":\"Kanderadk-Blackmoore\"", json);
     }
 
     [Fact]
@@ -147,7 +211,10 @@ public class RcLootCouncilJsonWriterTests
         var rows = new List<Row>();
         foreach (var element in doc.RootElement.EnumerateArray())
         {
-            var serverTime = element.GetProperty("servertime").GetString()!;
+            var serverTimeEl = element.GetProperty("servertime");
+            var serverTime = serverTimeEl.ValueKind == JsonValueKind.Number
+                ? serverTimeEl.GetInt64().ToString(CultureInfo.InvariantCulture)
+                : serverTimeEl.GetString()!;
             var id = element.GetProperty("id").GetString()!;
             rows.Add(new Row(serverTime, id, Canonicalize(element)));
         }

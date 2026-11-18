@@ -13,3 +13,4 @@ docs/superpowers/
 # reports, review diffs). Scaffolding: what has to survive a run is the code and
 # its comments, and those are tracked.
 .superpowers/
+.claude/

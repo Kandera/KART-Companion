@@ -43,3 +43,9 @@ Two `MinimumSize` clamp tests need a second monitor and do nothing on CI.
 A complete-looking mutation table says nothing about a mechanism with no coverage at all.
 That is how `chrome.BringToFront()` stayed deletable -- which opens the window with no title
 bar, no caption and no close button. Every report lists the unpinned, not just the verified.
+
+## Where this repo lives
+
+Source: `omarchy-lenovo:~/Projects/KART-Companion` (since 2026-11-18). Edit, commit and push there.
+
+Windows test copy: `E:\Projects\KART-Companion` on the desktop `kanderapc`, no `.git`. Never edit it; the next sync overwrites it. To test on Windows, run `pc-sync KART-Companion` on `omarchy-lenovo`, then test on the desktop. `hc exec --on kanderapc '<cmd>'` runs a command there. Windows paths in this repo (`C:\Users\max\...`, `E:\...`) are on the desktop; reach them with `ssh kanderapc`. Details: `machine-setup` README section Repos.

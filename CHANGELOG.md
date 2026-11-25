@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - The loot-council sync no longer runs. The timer and **Read history** only read loot history from SavedVariables.
 - Loot history JSON uses the addon's award id. The old time-plus-position id is gone.
+- Bonus rolls (responseID BONUSROLL or BONUS_ROLL) are left out of the WowUtils history upload.
 
 ### Removed
 - **Copy for WoWUtils** as the way to get history into WowUtils. **Save a copy** still writes a local JSON file.

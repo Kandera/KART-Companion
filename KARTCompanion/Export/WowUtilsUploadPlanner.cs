@@ -18,10 +18,12 @@ public static class WowUtilsUploadPlanner
     private const string PreviousImportNewMessage = "A previous import came back as new. Nothing was imported.";
 
     public static IReadOnlyList<ArchivedAward> SelectForPreview(IEnumerable<ArchivedAward> awards) =>
-        awards.Where(a => !a.Withdrawn && !a.ExcludedFromExport && !string.IsNullOrEmpty(EffectiveId(a))).ToList();
+        awards.Where(a => !a.Withdrawn && !a.ExcludedFromExport && !IsBonusRoll(a)
+            && !string.IsNullOrEmpty(EffectiveId(a))).ToList();
 
     public static int CountMissingId(IEnumerable<ArchivedAward> awards) =>
-        awards.Count(a => !a.Withdrawn && !a.ExcludedFromExport && string.IsNullOrEmpty(EffectiveId(a)));
+        awards.Count(a => !a.Withdrawn && !a.ExcludedFromExport && !IsBonusRoll(a)
+            && string.IsNullOrEmpty(EffectiveId(a)));
 
     public static UploadDecision Decide(IReadOnlyList<ArchivedAward> previewed, UploadPreview preview, int skippedMissingId)
     {
@@ -89,6 +91,14 @@ public static class WowUtilsUploadPlanner
 
             award.WowUtilsConfirmUncertainAt = now;
         }
+    }
+
+    // Same rule as IsBonusEntry in KeineAhnungRaidTools LootHistory.lua. A missing or
+    // non-string responseID is not a bonus roll.
+    private static bool IsBonusRoll(ArchivedAward award)
+    {
+        var responseId = award.EffectiveFields.TryGetValue("responseID", out var v) ? v as string : null;
+        return responseId is "BONUSROLL" or "BONUS_ROLL";
     }
 
     private static string? EffectiveId(ArchivedAward award) =>

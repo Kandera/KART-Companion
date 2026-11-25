@@ -25,6 +25,31 @@ public class WowUtilsUploadPlannerTests
     }
 
     [Fact]
+    public void Select_OmitsBonusRollsAndDoesNotCountThemAsMissingId()
+    {
+        var numeric = Award("numeric");
+        numeric.Fields["responseID"] = 3d;
+        var numericMissingId = Award("");
+        numericMissingId.Fields["responseID"] = 3d;
+
+        var awards = new[]
+        {
+            Award("keep", responseId: "1"),
+            Award("roll", responseId: "BONUSROLL"),
+            Award("roll-alt", responseId: "BONUS_ROLL"),
+            Award("", responseId: "BONUSROLL"),
+            Award("", responseId: "BONUS_ROLL"),
+            numeric,
+            numericMissingId,
+        };
+
+        var selected = WowUtilsUploadPlanner.SelectForPreview(awards);
+
+        Assert.Equal(new[] { "keep", "numeric" }, selected.Select(a => a.Fields["id"]).ToArray());
+        Assert.Equal(1, WowUtilsUploadPlanner.CountMissingId(awards));
+    }
+
+    [Fact]
     public void Decide_AllDuplicate_WritesReceiptsAndDoesNotConfirm()
     {
         var awards = new[] { Award("a"), Award("b") };
@@ -150,10 +175,17 @@ public class WowUtilsUploadPlannerTests
     private static UploadPreview Preview(params (string Id, PreviewClass Class)[] rows) =>
         new(true, rows.ToDictionary(r => r.Id, r => r.Class));
 
-    private static ArchivedAward Award(string id, bool withdrawn = false, bool excluded = false, DateTimeOffset? imported = null, DateTimeOffset? uncertain = null, DateTimeOffset? clipboard = null) =>
+    private static ArchivedAward Award(
+        string id,
+        bool withdrawn = false,
+        bool excluded = false,
+        DateTimeOffset? imported = null,
+        DateTimeOffset? uncertain = null,
+        DateTimeOffset? clipboard = null,
+        string? responseId = null) =>
         new()
         {
-            Fields = new Dictionary<string, object?> { ["id"] = id },
+            Fields = new Dictionary<string, object?> { ["id"] = id, ["responseID"] = responseId },
             Withdrawn = withdrawn,
             ExcludedFromExport = excluded,
             WowUtilsImportedAt = imported,

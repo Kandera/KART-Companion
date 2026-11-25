@@ -51,6 +51,12 @@ public sealed class CompanionConfig
     /// </summary>
     public Dictionary<string, DateTimeOffset> LootHistoryUnreadableNotifiedAt { get; set; } = new();
 
+    /// <summary>
+    /// Reason texts left out of Export to WowUtils. Empty includes every reason. The empty string
+    /// means awards that have no reason. A reason that is not in this list is sent.
+    /// </summary>
+    public List<string> UploadExcludedReasons { get; set; } = new();
+
     public bool IsComplete => !string.IsNullOrWhiteSpace(GroupKey) && !string.IsNullOrWhiteSpace(SavedVariablesFilePath);
 
     /// <summary>
@@ -65,6 +71,7 @@ public sealed class CompanionConfig
         var copy = (CompanionConfig)MemberwiseClone();
         copy.LootHistoryReadAt = new Dictionary<string, DateTimeOffset>(LootHistoryReadAt);
         copy.LootHistoryUnreadableNotifiedAt = new Dictionary<string, DateTimeOffset>(LootHistoryUnreadableNotifiedAt);
+        copy.UploadExcludedReasons = new List<string>(UploadExcludedReasons);
         return copy;
     }
 }

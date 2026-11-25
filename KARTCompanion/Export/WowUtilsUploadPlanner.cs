@@ -17,13 +17,25 @@ public static class WowUtilsUploadPlanner
     private const string UnclassifiedMessage = "WowUtils did not classify every award. Nothing was imported.";
     private const string PreviousImportNewMessage = "A previous import came back as new. Nothing was imported.";
 
-    public static IReadOnlyList<ArchivedAward> SelectForPreview(IEnumerable<ArchivedAward> awards) =>
-        awards.Where(a => !a.Withdrawn && !a.ExcludedFromExport && !IsBonusRoll(a)
-            && !string.IsNullOrEmpty(EffectiveId(a))).ToList();
+    public static IReadOnlyList<ArchivedAward> SelectForPreview(
+        IEnumerable<ArchivedAward> awards,
+        IReadOnlySet<string>? excludedReasons = null) =>
+        awards.Where(a => Eligible(a, excludedReasons) && !string.IsNullOrEmpty(EffectiveId(a))).ToList();
 
-    public static int CountMissingId(IEnumerable<ArchivedAward> awards) =>
-        awards.Count(a => !a.Withdrawn && !a.ExcludedFromExport && !IsBonusRoll(a)
-            && string.IsNullOrEmpty(EffectiveId(a)));
+    public static int CountMissingId(
+        IEnumerable<ArchivedAward> awards,
+        IReadOnlySet<string>? excludedReasons = null) =>
+        awards.Count(a => Eligible(a, excludedReasons) && string.IsNullOrEmpty(EffectiveId(a)));
+
+    /// <summary>Awards the reason switches held back. Withdrawn and never-export awards are not
+    /// counted: they were already out of the upload.</summary>
+    public static int CountLeftOutByReason(
+        IEnumerable<ArchivedAward> awards,
+        IReadOnlySet<string>? excludedReasons) =>
+        awards.Count(a => !a.Withdrawn && !a.ExcludedFromExport && UploadReasons.IsLeftOut(a, excludedReasons));
+
+    private static bool Eligible(ArchivedAward award, IReadOnlySet<string>? excludedReasons) =>
+        !award.Withdrawn && !award.ExcludedFromExport && !UploadReasons.IsLeftOut(award, excludedReasons);
 
     public static UploadDecision Decide(IReadOnlyList<ArchivedAward> previewed, UploadPreview preview, int skippedMissingId)
     {
@@ -91,14 +103,6 @@ public static class WowUtilsUploadPlanner
 
             award.WowUtilsConfirmUncertainAt = now;
         }
-    }
-
-    // Same rule as IsBonusEntry in KeineAhnungRaidTools LootHistory.lua. A missing or
-    // non-string responseID is not a bonus roll.
-    private static bool IsBonusRoll(ArchivedAward award)
-    {
-        var responseId = award.EffectiveFields.TryGetValue("responseID", out var v) ? v as string : null;
-        return responseId is "BONUSROLL" or "BONUS_ROLL";
     }
 
     private static string? EffectiveId(ArchivedAward award) =>

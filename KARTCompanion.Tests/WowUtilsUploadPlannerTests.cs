@@ -25,28 +25,37 @@ public class WowUtilsUploadPlannerTests
     }
 
     [Fact]
-    public void Select_OmitsBonusRollsAndDoesNotCountThemAsMissingId()
+    public void Select_OmitsReasonsTheCallerLeftOut()
     {
-        var numeric = Award("numeric");
-        numeric.Fields["responseID"] = 3d;
-        var numericMissingId = Award("");
-        numericMissingId.Fields["responseID"] = 3d;
-
         var awards = new[]
         {
-            Award("keep", responseId: "1"),
-            Award("roll", responseId: "BONUSROLL"),
-            Award("roll-alt", responseId: "BONUS_ROLL"),
-            Award("", responseId: "BONUSROLL"),
-            Award("", responseId: "BONUS_ROLL"),
-            numeric,
-            numericMissingId,
+            Award("keep", reason: "BiS"),
+            Award("bonus", reason: "Bonus Loot"),
+            Award("transmog", reason: "Transmog"),
+            Award("blank", reason: ""),
+            Award("", reason: "Bonus Loot"),
+        };
+        var excluded = new HashSet<string> { "Bonus Loot", "" };
+
+        var selected = WowUtilsUploadPlanner.SelectForPreview(awards, excluded);
+
+        Assert.Equal(new[] { "keep", "transmog" }, selected.Select(a => a.Fields["id"]).ToArray());
+        Assert.Equal(0, WowUtilsUploadPlanner.CountMissingId(awards, excluded));
+        Assert.Equal(3, WowUtilsUploadPlanner.CountLeftOutByReason(awards, excluded));
+    }
+
+    [Fact]
+    public void Select_WithNoExcludedReasons_KeepsEveryReason()
+    {
+        var awards = new[]
+        {
+            Award("bonus", reason: "Bonus Loot"),
+            Award("bis", reason: "BiS"),
         };
 
         var selected = WowUtilsUploadPlanner.SelectForPreview(awards);
 
-        Assert.Equal(new[] { "keep", "numeric" }, selected.Select(a => a.Fields["id"]).ToArray());
-        Assert.Equal(1, WowUtilsUploadPlanner.CountMissingId(awards));
+        Assert.Equal(new[] { "bonus", "bis" }, selected.Select(a => a.Fields["id"]).ToArray());
     }
 
     [Fact]
@@ -182,10 +191,12 @@ public class WowUtilsUploadPlannerTests
         DateTimeOffset? imported = null,
         DateTimeOffset? uncertain = null,
         DateTimeOffset? clipboard = null,
-        string? responseId = null) =>
+        string? reason = null) =>
         new()
         {
-            Fields = new Dictionary<string, object?> { ["id"] = id, ["responseID"] = responseId },
+            Fields = reason == null
+                ? new Dictionary<string, object?> { ["id"] = id }
+                : new Dictionary<string, object?> { ["id"] = id, ["reason"] = reason },
             Withdrawn = withdrawn,
             ExcludedFromExport = excluded,
             WowUtilsImportedAt = imported,

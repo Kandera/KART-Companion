@@ -231,6 +231,32 @@ public class HistoryScreenFormTests
     }
 
     [Fact]
+    public void UploadReasonsButton_ShowsHowManyReasonsAreOff()
+    {
+        WinFormsHarness.Run(() =>
+        {
+            var screen = new HistoryScreen(
+                Array.Empty<ArchivedAward>(),
+                () => new ArchiveDocument(),
+                _ => { },
+                excludedUploadReasons: new[] { "Bonus Loot", "Transmog" });
+            try
+            {
+                WinFormsHarness.RealiseHandles(screen.View);
+                WinFormsHarness.Pump();
+                var button = WinFormsHarness.Find<Button>(screen.View, "UploadReasonsButton");
+                Assert.Equal("Reasons: 2 off", button.Text);
+                Assert.True(button.Enabled);
+            }
+            finally
+            {
+                screen.View.Dispose();
+                WinFormsHarness.Pump();
+            }
+        });
+    }
+
+    [Fact]
     public void ExportClick_MissingLogin_ShowsTheErrorResult()
     {
         WinFormsHarness.Run(() =>

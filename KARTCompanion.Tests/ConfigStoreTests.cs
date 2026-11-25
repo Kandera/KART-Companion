@@ -62,6 +62,7 @@ public class ConfigStoreTests : IDisposable
             LastSyncUtc = DateTimeOffset.FromUnixTimeSeconds(1785400000),
             LootHistoryReadAt = { [@"C:\wow\sv.lua"] = DateTimeOffset.FromUnixTimeSeconds(1785300000) },
             LootHistoryUnreadableNotifiedAt = { [@"C:\wow\sv.lua"] = DateTimeOffset.FromUnixTimeSeconds(1785200000) },
+            UploadExcludedReasons = new List<string> { "Bonus Loot" },
         };
 
         var copy = original.Copy();

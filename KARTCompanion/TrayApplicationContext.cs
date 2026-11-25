@@ -180,7 +180,13 @@ public sealed class TrayApplicationContext : ApplicationContext
                 if (string.IsNullOrWhiteSpace(_config.ImportCredential)) return null;
                 return new LootHistoryImporter(_httpClient, LootHistoryImportCapture.Load(CapturePath), _config.ImportCredential);
             },
-            refreshFromSavedVariables: () => ReadLootHistory(announceNothingNew: false));
+            refreshFromSavedVariables: () => ReadLootHistory(announceNothingNew: false),
+            excludedUploadReasons: _config.UploadExcludedReasons,
+            saveExcludedUploadReasons: reasons =>
+            {
+                _config.UploadExcludedReasons = reasons.ToList();
+                ConfigStore.Save(_config);
+            });
 
         _shell = new CompanionShell(new IScreen[] { settingsScreen, historyScreen }, _logo, _appIcon);
         _shell.FormClosed += (_, _) =>

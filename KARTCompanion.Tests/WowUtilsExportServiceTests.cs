@@ -96,6 +96,26 @@ public class WowUtilsExportServiceTests
     }
 
     [Fact]
+    public async Task Run_ExcludedReason_IsNotSentOrReceipted()
+    {
+        var keep = Award("keep", reason: "BiS");
+        var bonus = Award("bonus", reason: "Bonus Loot");
+        var doc = Doc(keep, bonus);
+        var transport = new FakeTransport(previewBody: """{"inserted":1,"modified":0,"skippedReasons":[]}""");
+
+        var result = await WowUtilsExportService.Run(
+            () => doc, _ => { }, null, transport, true, true, Now,
+            excludedReasons: new HashSet<string> { "Bonus Loot" });
+
+        Assert.Equal(ExportResultKind.Success, result.Kind);
+        Assert.Contains("keep", transport.LastPreviewBody);
+        Assert.DoesNotContain("bonus", transport.LastPreviewBody);
+        Assert.Equal(Now, keep.WowUtilsImportedAt);
+        Assert.Null(bonus.WowUtilsImportedAt);
+        Assert.Contains("1 left out by reason", result.Message);
+    }
+
+    [Fact]
     public async Task Run_RefreshRunsBeforeLoad()
     {
         var order = new List<string>();
@@ -143,10 +163,12 @@ public class WowUtilsExportServiceTests
 
     private static ArchiveDocument Doc(params ArchivedAward[] awards) => new() { Awards = awards.ToList() };
 
-    private static ArchivedAward Award(string id, DateTimeOffset? uncertain = null) =>
+    private static ArchivedAward Award(string id, DateTimeOffset? uncertain = null, string? reason = null) =>
         new()
         {
-            Fields = new Dictionary<string, object?> { ["id"] = id },
+            Fields = reason == null
+                ? new Dictionary<string, object?> { ["id"] = id }
+                : new Dictionary<string, object?> { ["id"] = id, ["reason"] = reason },
             ExportedByCompanionAt = null,
             WowUtilsConfirmUncertainAt = uncertain,
         };

@@ -71,6 +71,9 @@ public sealed class HistoryScreen : IScreen
     private readonly Button _copyButton;
     private readonly Button _saveButton;
     private readonly Button _editButton;
+    private readonly Button _reasonsButton;
+    private readonly Action<IReadOnlyCollection<string>>? _saveExcludedUploadReasons;
+    private readonly HashSet<string> _excludedUploadReasons;
 
     private IReadOnlyList<ArchivedAward> _awards;
     private IReadOnlyList<ArchivedAward> _filtered = Array.Empty<ArchivedAward>();
@@ -119,13 +122,17 @@ public sealed class HistoryScreen : IScreen
     /// <param name="uploadEnabled">The capture gate: the export button is enabled only when a WowUtils import capture is present, not when a row is selected.</param>
     /// <param name="createImporter">Builds the WowUtils transport, or null when no login is stored.</param>
     /// <param name="refreshFromSavedVariables">Re-reads loot history from SavedVariables before an upload so the archive is current.</param>
+    /// <param name="excludedUploadReasons">Reason texts left out of Export to WowUtils. Empty includes every reason. The empty string means awards with no reason.</param>
+    /// <param name="saveExcludedUploadReasons">Persists a new set of left-out reasons. Null keeps the choice for this window only.</param>
     public HistoryScreen(
         IReadOnlyList<ArchivedAward> awards,
         Func<ArchiveDocument> loadArchive,
         Action<ArchiveDocument> saveArchive,
         bool uploadEnabled = false,
         Func<ILootHistoryImportTransport?>? createImporter = null,
-        Action? refreshFromSavedVariables = null)
+        Action? refreshFromSavedVariables = null,
+        IReadOnlyCollection<string>? excludedUploadReasons = null,
+        Action<IReadOnlyCollection<string>>? saveExcludedUploadReasons = null)
     {
         _awards = awards;
         _loadArchive = loadArchive;
@@ -133,6 +140,8 @@ public sealed class HistoryScreen : IScreen
         _uploadEnabled = uploadEnabled;
         _createImporter = createImporter;
         _refreshFromSavedVariables = refreshFromSavedVariables;
+        _saveExcludedUploadReasons = saveExcludedUploadReasons;
+        _excludedUploadReasons = new HashSet<string>(excludedUploadReasons ?? Array.Empty<string>(), StringComparer.Ordinal);
         // Sized before anything is placed in it, because everything below is placed at a pixel
         // offset that assumes this size and then anchored to an edge of it. WinForms anchoring keeps
         // the gap a control had to its parent's edges at the moment the parent is resized, so a
@@ -273,6 +282,14 @@ public sealed class HistoryScreen : IScreen
         _editButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _editButton.Click += (_, _) => EditSelected();
 
+        _reasonsButton = Theme.CreateButton(ReasonsButtonText());
+        _reasonsButton.Name = "UploadReasonsButton";
+        _reasonsButton.Left = _editButton.Right + 10;
+        _reasonsButton.Top = 580;
+        _reasonsButton.Width = 160;
+        _reasonsButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+        _reasonsButton.Click += (_, _) => ChooseUploadReasons();
+
         _countLabel = FooterLabel(622);
         _noticeLabel = FooterLabel(644);
         _resultLabel = FooterLabel(666);
@@ -283,7 +300,7 @@ public sealed class HistoryScreen : IScreen
             playerLabel, _playerCombo, fromLabel, _fromBox, toLabel, _toBox,
             statusLabel, _statusCombo, searchLabel, _searchBox,
             _dateWarningLabel, _listView, _emptyLabel,
-            _copyButton, _saveButton, _editButton, _countLabel, _noticeLabel, _resultLabel,
+            _copyButton, _saveButton, _editButton, _reasonsButton, _countLabel, _noticeLabel, _resultLabel,
         });
 
         // Controls.AddRange leaves _listView in front of _emptyLabel (added right after it, but
@@ -648,9 +665,10 @@ public sealed class HistoryScreen : IScreen
         SetResult(HistoryExportPlanner.EditSummary(outcome.Award), ResultKind.Success);
     }
 
-    // The upload is the whole eligible archive, not the list selection. WowUtilsExportService.Run
-    // re-reads, previews, confirms, and stamps WowUtilsImportedAt. After a successful Run the list
-    // is redrawn from the archive that call just saved — ReloadFromArchive, not a second rebuild.
+    // The upload is the eligible archive minus the reasons switched off, not the list selection.
+    // WowUtilsExportService.Run re-reads, previews, confirms, and stamps WowUtilsImportedAt. After a
+    // successful Run the list is redrawn from the archive that call just saved — ReloadFromArchive,
+    // not a second rebuild.
     private async void OnExport()
     {
         if (_exportRunning)
@@ -672,6 +690,7 @@ public sealed class HistoryScreen : IScreen
         _copyButton.Enabled = false;
         _saveButton.Enabled = false;
         _editButton.Enabled = false;
+        _reasonsButton.Enabled = false;
         try
         {
             var result = await WowUtilsExportService.Run(
@@ -681,7 +700,8 @@ public sealed class HistoryScreen : IScreen
                 importer,
                 uploadEnabled: true,
                 hasCredential: true,
-                DateTimeOffset.Now);
+                DateTimeOffset.Now,
+                _excludedUploadReasons);
             SetResult(result.Message, result.Kind == ExportResultKind.Success ? ResultKind.Success : ResultKind.Error);
             ReloadFromArchive();
         }
@@ -758,7 +778,8 @@ public sealed class HistoryScreen : IScreen
         var selected = SelectedAwards();
         var exportable = HistoryExportPlanner.AwardsToExport(selected);
 
-        _countLabel.Text = HistoryExportPlanner.SelectionSummary(_filtered.Count, selected);
+        _countLabel.Text = HistoryExportPlanner.SelectionSummary(_filtered.Count, selected)
+            + UploadReasons.Summary(_excludedUploadReasons);
 
         // Asked about the real selection, not the withdrawn-filtered exportable set: a display
         // snapshot can show an award withdrawn when ArchiveMerger has since un-withdrawn it (a
@@ -779,16 +800,36 @@ public sealed class HistoryScreen : IScreen
             _copyButton.Enabled = false;
             _saveButton.Enabled = false;
             _editButton.Enabled = false;
+            _reasonsButton.Enabled = false;
         }
         else
         {
             _copyButton.Enabled = _uploadEnabled;
             _saveButton.Enabled = exportable.Count > 0;
+            _reasonsButton.Enabled = true;
 
             // Exactly one row: a correction is a statement about one award, and there is no sensible
             // meaning for "apply this player name to twelve of them".
             _editButton.Enabled = _listView.SelectedIndices.Count == 1;
         }
+    }
+
+    private string ReasonsButtonText() =>
+        _excludedUploadReasons.Count == 0
+            ? "Reasons: all on"
+            : $"Reasons: {_excludedUploadReasons.Count} off";
+
+    private void ChooseUploadReasons()
+    {
+        var keys = _awards.Select(UploadReasons.Key).Concat(_excludedUploadReasons);
+        using var dialog = new ReasonUploadDialog(keys, _excludedUploadReasons);
+        if (dialog.ShowDialog(_view.FindForm()) != DialogResult.OK) return;
+
+        _excludedUploadReasons.Clear();
+        foreach (var key in dialog.ExcludedReasons) _excludedUploadReasons.Add(key);
+        _reasonsButton.Text = ReasonsButtonText();
+        _saveExcludedUploadReasons?.Invoke(_excludedUploadReasons.OrderBy(r => r, StringComparer.Ordinal).ToList());
+        UpdateFooter();
     }
 }
 

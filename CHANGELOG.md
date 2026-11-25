@@ -9,11 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - **Export to WowUtils** on the history screen sends the archive through the website import preview and confirm. A receipt is stored only when WowUtils calls that award a duplicate or accepts it. A confirm that does not answer clearly is not sent again while WowUtils still calls it new.
 - Failed exports are shown as errors, and a second click is ignored while an export is running.
+- **Reasons** on the history screen chooses which loot reasons Export to WowUtils sends. A reason that is off stays in the list and is left out of the upload. The choice is kept until it is changed.
 
 ### Changed
 - The loot-council sync no longer runs. The timer and **Read history** only read loot history from SavedVariables.
 - Loot history JSON uses the addon's award id. The old time-plus-position id is gone.
-- Bonus rolls (responseID BONUSROLL or BONUS_ROLL) are left out of the WowUtils history upload.
 
 ### Removed
 - **Copy for WoWUtils** as the way to get history into WowUtils. **Save a copy** still writes a local JSON file.

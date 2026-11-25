@@ -26,6 +26,7 @@ public static class WowUtilsExportService
         bool uploadEnabled,
         bool hasCredential,
         DateTimeOffset now,
+        IReadOnlySet<string>? excludedReasons = null,
         CancellationToken cancellationToken = default)
     {
         if (!uploadEnabled)
@@ -37,12 +38,13 @@ public static class WowUtilsExportService
         refresh?.Invoke();
         var doc = load();
 
-        var previewed = WowUtilsUploadPlanner.SelectForPreview(doc.Awards);
-        var skipped = WowUtilsUploadPlanner.CountMissingId(doc.Awards);
+        var previewed = WowUtilsUploadPlanner.SelectForPreview(doc.Awards, excludedReasons);
+        var skipped = WowUtilsUploadPlanner.CountMissingId(doc.Awards, excludedReasons);
+        var leftOut = LeftOutNote(WowUtilsUploadPlanner.CountLeftOutByReason(doc.Awards, excludedReasons));
         if (previewed.Count == 0)
         {
             save(doc);
-            return Ok($"Imported 0, updated 0. {skipped} skipped with no id.");
+            return Ok($"Imported 0, updated 0. {skipped} skipped with no id.{leftOut}");
         }
 
         var entries = RcLootCouncilJsonWriter.Write(previewed.Select(a => new LootHistoryEntry(a.EffectiveFields)));
@@ -62,8 +64,11 @@ public static class WowUtilsExportService
         var ids = previewed.Select(EffectiveId).Where(id => !string.IsNullOrEmpty(id)).Cast<string>().ToList();
         WowUtilsUploadPlanner.ApplyReceipts(doc.Awards, ids, now);
         save(doc);
-        return Ok($"Imported {inserted}, updated {modified}. {skipped} skipped with no id.");
+        return Ok($"Imported {inserted}, updated {modified}. {skipped} skipped with no id.{leftOut}");
     }
+
+    private static string LeftOutNote(int leftOut) =>
+        leftOut == 0 ? "" : $" {leftOut} left out by reason.";
 
     private static bool TryParseChunkResult(string? body, out int inserted, out int modified, out string skippedReasons)
     {
